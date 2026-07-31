@@ -41,7 +41,7 @@ def newton_method(info):
 
         direction = DQ
         directional_derivative = -lambda_Q_squared  # <grad f(Q), direction> = -lambda_Q^2
-        print("directional derivative ", directional_derivative)
+
         # backtracking line search: shrink the step until Q_candidate stays positive definite
         # (the domain of -log det(Q)) and satisfies the Armijo sufficient-decrease condition
         t = 1.0
@@ -64,6 +64,5 @@ def newton_method(info):
         trace_direction_H = np.einsum('ij,ij->', direction, H)
         trace_HH = np.einsum('ij,ij->', H, H)
         Q = Q - (trace_direction_H / trace_HH) * H
-        print("tr(QH) ", np.einsum('ij,ij->', Q, H))
 
     return Q, history
