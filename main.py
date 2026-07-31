@@ -70,9 +70,9 @@ if __name__ == "__main__":
     M = generate_masks_2d(nbr_of_sample=10, p_missing=[0.5, 0.25, 0.25])
 
         
-    info = {'dataset': observations, 'masks':M, 'anchor_nodes':a_n, 'model_precision':eta}
+    info = {'dataset': observations, 'masks': M, 'anchor_nodes': a_n, 'model_precision': eta}
 
-
+    
 
 
 

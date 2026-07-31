@@ -35,19 +35,47 @@ def K_S(info):
     return np.einsum('ki,kj->kij', phi_S, phi_S)  # (n, m, m)
 
 
-def C_2eta_NS(info):
+def log_C_2eta_NS(info):
     """
     info: dict with keys
         'precision': (d,) per-dimension precision of the Gaussian kernel
         'masks': (n, d) boolean (or 0/1), 1 where that observation's dimension is missing (NS), 0
                  where observed
-    returns: (n,) array of c_{2 eta_NS} = (pi/2)^{|NS|/2} * prod_{d in NS} eta_d^{-1/2}, one per
-             observation
+    returns: (n,) array of log(c_{2 eta_NS}) = sum_{d in NS} (0.5*log(pi/2) - 0.5*log(eta_d)), one
+             per observation
     """
     eta = info['precision']
     mask = np.asarray(info['masks'], dtype=bool)  # True on missing (NS) dimensions
-    log_c_2eta_NS = np.sum(mask * (0.5 * np.log(np.pi / 2) - 0.5 * np.log(eta)[None, :]), axis=-1)  # (n,)
-    return np.exp(log_c_2eta_NS)
+    return np.sum(mask * (0.5 * np.log(np.pi / 2) - 0.5 * np.log(eta)[None, :]), axis=-1)  # (n,)
+
+
+def C_2eta_NS(info):
+    """
+    info: dict with keys 'precision', 'masks' (see log_C_2eta_NS)
+    returns: (n,) array of c_{2 eta_NS} = (pi/2)^{|NS|/2} * prod_{d in NS} eta_d^{-1/2}, one per
+             observation
+    """
+    return np.exp(log_C_2eta_NS(info))
+
+
+def log_c_2eta(info):
+    """
+    info: dict with key 'precision': (d,) per-dimension precision of the Gaussian kernel
+    returns: scalar, log(c_{2 eta}) = (d/2)*log(pi/2) - 0.5*sum_d log(eta_d), the normalizing
+             constant for H_eta_half -- the same construction as log_C_2eta_NS, but over all d
+             dimensions (as if every dimension were missing), since H_eta_half has no mask
+    """
+    eta = info['precision']
+    d = eta.shape[0]
+    return (d / 2) * np.log(np.pi / 2) - 0.5 * np.sum(np.log(eta))
+
+
+def c_2eta(info):
+    """
+    info: dict with key 'precision' (see log_c_2eta)
+    returns: scalar, c_{2 eta} = (pi/2)^{d/2} * prod_d eta_d^{-1/2}
+    """
+    return np.exp(log_c_2eta(info))
 
 
 def H_NS(info):
@@ -67,6 +95,36 @@ def H_NS(info):
     eta_NS_half = (eta[None, :] * mask) / 2  # (n, d)
     diff2 = (w[:, None, :] - w[None, :, :]) ** 2  # (m, m, d)
     d2 = np.einsum('kd,ijd->kij', eta_NS_half, diff2)  # (n, m, m)
+    return np.exp(-d2)
+
+
+def H_eta(info):
+    """
+    info: dict with keys
+        'anchor_nodes': (m, d) anchor/inducing points
+        'precision': (d,) per-dimension precision of the Gaussian kernel
+    returns: (m, m) matrix, the Gaussian kernel matrix among the anchor nodes at the full
+             bandwidth: H_eta[k, l] = k_eta(w_k, w_l) = exp(-sum_d eta_d (w_k,d - w_l,d)^2)
+    """
+    w = info['anchor_nodes']
+    eta = info['precision']
+    diff2 = (w[:, None, :] - w[None, :, :]) ** 2  # (m, m, d)
+    d2 = np.einsum('d,ijd->ij', eta, diff2)  # (m, m)
+    return np.exp(-d2)
+
+
+def H_eta_half(info):
+    """
+    info: dict with keys
+        'anchor_nodes': (m, d) anchor/inducing points
+        'precision': (d,) per-dimension precision of the Gaussian kernel
+    returns: (m, m) matrix, the Gaussian kernel matrix among the anchor nodes at half the
+             bandwidth: H_{eta/2}[k, l] = k_{eta/2}(w_k, w_l) = exp(-sum_d (eta_d/2) (w_k,d - w_l,d)^2)
+    """
+    w = info['anchor_nodes']
+    eta = info['precision']
+    diff2 = (w[:, None, :] - w[None, :, :]) ** 2  # (m, m, d)
+    d2 = np.einsum('d,ijd->ij', eta / 2, diff2)  # (m, m)
     return np.exp(-d2)
 
 
@@ -198,5 +256,88 @@ def hessian_inverse_vector_product(info):
 
     return Q @ (V - Z) @ Q / mu
 
+
+def B_lbd_alpha(info):
+    """
+    info: dict with keys 'Q', 'A', 'A_0', 'alpha', 'lbd'
+    returns: (m, m) matrix B_{lbd, alpha} = -lbd * A_0 + alpha * A_tilde(alpha), where
+             A_tilde(alpha) = (1/N) sum_i A_i / (Tr(Q A_i) + alpha)^2
+    """
+    Q = info['Q']
+    A = info['A']
+    A_0 = info['A_0']
+    alpha = info['alpha']
+    lbd = info['lbd']
+    g = np.einsum('jk,ikj->i', Q, A) + alpha  # (N,): g[i] = Tr(Q A_i) + alpha
+    A_tilde = np.mean(A / (g ** 2)[:, None, None], axis=0)  # (m, m): A_tilde(alpha)
+    return -lbd * A_0 + alpha * A_tilde
+
+
+def newton_step_and_decrement(info):
+    """
+    info: dict with keys 'Q', 'A', 'A_0', 'alpha', 'lbd', 'mu' (see hessian_inverse_vector_product
+          and B_lbd_alpha), plus 'H': (m, m) constraint matrix (Tr(Q H) = 1)
+    returns: (DQ, nu, lambda_Q_squared)
+        DQ: (m, m), the Newton step DQ = Q + G_Q^-1(B_{lbd,alpha}) - nu * G_Q^-1(H)
+        nu: scalar, the Lagrange multiplier enforcing Tr(Q H) = 1
+                nu = -(1 + <G_Q^-1(H), B_{lbd,alpha}>) / (-<G_Q^-1(H), H>)
+        lambda_Q_squared: scalar, the squared Newton decrement
+                lambda_Q^2 = <G_Q(Q), Q> + <Q, B_{lbd,alpha} - nu * H> + <B_{lbd,alpha}, DQ>
+                           = c_{alpha,Q} + m * mu + Tr(Q B_{lbd,alpha}) - nu + Tr(B_{lbd,alpha} DQ)
+            where c_{alpha,Q} = (1/N) sum_i Tr(Q A_i)^2 / (Tr(Q A_i) + alpha)^2 and m = Q.shape[0]
+            (uses <G_Q(Q), Q> = c_{alpha,Q} + m * mu, and Tr(Q H) = 1 so <Q, nu * H> = nu)
+        with <X, Y> = Tr(X Y) the trace inner product on symmetric matrices S_d
+    """
+    Q = info['Q']
+    A = info['A']
+    alpha = info['alpha']
+    mu = info['mu']
+    H = info['H']
+    m = Q.shape[0]
+
+    B = B_lbd_alpha(info)
+    G_inv_H = hessian_inverse_vector_product({**info, 'V': H})  # (m, m): G_Q^-1(H)
+    G_inv_B = hessian_inverse_vector_product({**info, 'V': B})  # (m, m): G_Q^-1(B_{lbd,alpha})
+
+    inner_G_inv_H_B = np.einsum('ij,ij->', G_inv_H, B)  # <G_Q^-1(H), B_{lbd,alpha}>
+    inner_G_inv_H_H = np.einsum('ij,ij->', G_inv_H, H)  # <G_Q^-1(H), H>
+    nu = -(1 + inner_G_inv_H_B) / (-inner_G_inv_H_H)
+
+    DQ = Q + G_inv_B - nu * G_inv_H
+
+    trace_QA = np.einsum('jk,ikj->i', Q, A)  # (N,): Tr(Q A_i)
+    g = trace_QA + alpha  # (N,): Tr(Q A_i) + alpha
+    c_alpha_Q = np.mean((trace_QA / g) ** 2)  # c_{alpha,Q}
+    trace_QB = np.einsum('ij,ij->', Q, B)  # Tr(Q B_{lbd,alpha})
+    trace_B_DQ = np.einsum('ij,ij->', B, DQ)  # Tr(B_{lbd,alpha} DQ)
+    lambda_Q_squared = c_alpha_Q + m * mu + trace_QB - nu + trace_B_DQ
+
+    return DQ, nu, lambda_Q_squared
+
+
+def omega_star(info):
+    """
+    info: dict with keys 'Q', 'A', 'A_0', 'alpha', 'lbd', 'mu'. 'Q' must be Q(X, eta), the optimal
+          solution of the convex problem min_{Q > 0, Tr(Q H) = 1} loss(Q) for the given anchor
+          nodes and precision (e.g. the Q returned by newton_method run to convergence) -- not an
+          arbitrary Q.
+    returns: scalar, the dual parameter omega^* = omega(X, eta), the optimal value of the dual
+        problem associated with this convex optimization problem:
+            omega^* = b_{alpha,Q} + mu * m - lbd * Tr(Q A_0)
+    where b_{alpha,Q} = (1/N) sum_i Tr(Q A_i) / (Tr(Q A_i) + alpha) and m = Q.shape[0]
+    """
+    Q = info['Q']
+    A = info['A']
+    A_0 = info['A_0']
+    alpha = info['alpha']
+    lbd = info['lbd']
+    mu = info['mu']
+    m = Q.shape[0]
+
+    trace_QA = np.einsum('jk,ikj->i', Q, A)  # (N,): Tr(Q A_i)
+    b_alpha_Q = np.mean(trace_QA / (trace_QA + alpha))  # b_{alpha,Q}
+    trace_QA0 = np.einsum('jk,kj->', Q, A_0)  # Tr(Q A_0)
+
+    return b_alpha_Q + mu * m - lbd * trace_QA0
 
 
