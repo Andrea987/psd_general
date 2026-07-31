@@ -63,6 +63,6 @@ def newton_method(info):
         # numerical drift accumulated in newton_step_and_decrement
         trace_direction_H = np.einsum('ij,ij->', direction, H)
         trace_HH = np.einsum('ij,ij->', H, H)
-        Q = Q - (trace_direction_H / trace_HH) * H
+        Q = Q - (trace_direction_H / trace_HH) * H  # renorma
 
     return Q, history
