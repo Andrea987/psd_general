@@ -13,6 +13,8 @@ import os
 import sys
 import pickle as pkl
 import copy
+import time
+import resource
 
 from sklearn.preprocessing import scale
 from sklearn.experimental import enable_iterative_imputer
@@ -112,6 +114,12 @@ device = torch.device('cuda') if torch.cuda.is_available() else torch.device(
 FORMAT = '%(asctime)-15s %(message)s'
 logging.basicConfig(level=logging.DEBUG, format=FORMAT)
 
+
+def peak_rss_mb():
+    """Process peak resident set size so far, in MB (ru_maxrss is KB on Linux, bytes on macOS)."""
+    maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return maxrss / (1024 ** 2) if sys.platform == 'darwin' else maxrss / 1024
+
 if __name__ == "__main__":
 
     OTLIM = 5000
@@ -135,8 +143,9 @@ if __name__ == "__main__":
                    lin_rr_scores, mlp_rr_scores]
 
     for dic in score_dicts:
-        for metric in ['MAE', 'RMSE', 'OT']:
+        for metric in ['MAE', 'RMSE', 'OT', 'runtime', 'memory']:
             dic[metric] = []
+    psd_scores['avg_bounce_time'] = []
 
     p = args.p
 
@@ -182,6 +191,9 @@ if __name__ == "__main__":
         psd_lbd = args.psd_lbd / N
         psd_mu = args.psd_mu / N
 
+        t_start = time.perf_counter()
+        mem_start = peak_rss_mb()
+
         psd_imp_np, psd_history = psd_impute(
             data_nas, mask.cpu().numpy(),
             m=args.psd_m, eta_init=args.psd_eta, alpha=args.psd_alpha, lbd=psd_lbd,
@@ -189,6 +201,12 @@ if __name__ == "__main__":
             nbr_bounce=args.psd_bounce, nbr_gradient_steps=args.psd_gradient_steps,
             nbr_newton_step_Q=args.psd_newton_step_Q, seed=n,
         )
+
+        psd_runtime = time.perf_counter() - t_start
+        psd_scores['runtime'].append(psd_runtime)
+        psd_scores['memory'].append(peak_rss_mb() - mem_start)
+        psd_scores['avg_bounce_time'].append(psd_runtime / args.psd_bounce)
+
         psd_imp = torch.tensor(psd_imp_np)
 
         data["imp"]["psd"].append(psd_imp[mask.bool()].detach().cpu().numpy())
@@ -203,19 +221,26 @@ if __name__ == "__main__":
             logging.info(f'psd imputation:\t '
                          f'MAE: {psd_scores["MAE"][-1]:.4f}\t'
                          f'RMSE: {psd_scores["RMSE"][-1]:.4f}\t'
-                         f'OT: {psd_scores["OT"][-1]:.4f}')
+                         f'OT: {psd_scores["OT"][-1]:.4f}\t'
+                         f'Time: {psd_runtime:.4f}s\t'
+                         f'Time/bounce: {psd_scores["avg_bounce_time"][-1]:.4f}s\t'
+                         f'Mem: {psd_scores["memory"][-1]:.2f}MB')
         else:
             logging.info(f'psd imputation:\t '
                          f'MAE: {psd_scores["MAE"][-1]:.4f}\t'
-                         f'RMSE: {psd_scores["RMSE"][-1]:.4f}')
+                         f'RMSE: {psd_scores["RMSE"][-1]:.4f}\t'
+                         f'Time: {psd_runtime:.4f}s\t'
+                         f'Time/bounce: {psd_scores["avg_bounce_time"][-1]:.4f}s\t'
+                         f'Mem: {psd_scores["memory"][-1]:.2f}MB')
 
-        ice_mean = IterativeImputer(random_state=0, max_iter=50)
-        ice_mean.fit(X_nas.cpu().numpy())
+        t_start = time.perf_counter()
+        mem_start = peak_rss_mb()
 
-        ice_imp = torch.tensor(ice_mean.transform(data_nas))
         mean_imp = (1 - mask) * X_true + mask * nanmean(X_nas)
 
-        data["imp"]["ice"].append(ice_imp.cpu().numpy())
+        mean_scores['runtime'].append(time.perf_counter() - t_start)
+        mean_scores['memory'].append(peak_rss_mb() - mem_start)
+
         data["imp"]["mean"].append(mean_imp.cpu().numpy())
 
         mean_scores['MAE'].append(MAE(mean_imp, X_true, mask).cpu().numpy())
@@ -229,11 +254,27 @@ if __name__ == "__main__":
             logging.info(f'mean imputation:\t '
                          f'MAE: {mean_scores["MAE"][-1]:.4f}\t'
                          f'RMSE: {mean_scores["RMSE"][-1]:.4f}\t'
-                         f'OT: {mean_scores["OT"][-1]:.4f}')
+                         f'OT: {mean_scores["OT"][-1]:.4f}\t'
+                         f'Time: {mean_scores["runtime"][-1]:.4f}s\t'
+                         f'Mem: {mean_scores["memory"][-1]:.2f}MB')
         else:
             logging.info(f'mean imputation:\t '
                          f'MAE: {mean_scores["MAE"][-1]:.4f}\t'
-                         f'RMSE: {mean_scores["RMSE"][-1]:.4f}')
+                         f'RMSE: {mean_scores["RMSE"][-1]:.4f}\t'
+                         f'Time: {mean_scores["runtime"][-1]:.4f}s\t'
+                         f'Mem: {mean_scores["memory"][-1]:.2f}MB')
+
+        t_start = time.perf_counter()
+        mem_start = peak_rss_mb()
+
+        ice_mean = IterativeImputer(random_state=0, max_iter=50)
+        ice_mean.fit(X_nas.cpu().numpy())
+        ice_imp = torch.tensor(ice_mean.transform(data_nas))
+
+        ice_scores['runtime'].append(time.perf_counter() - t_start)
+        ice_scores['memory'].append(peak_rss_mb() - mem_start)
+
+        data["imp"]["ice"].append(ice_imp.cpu().numpy())
 
         ice_scores['MAE'].append(MAE(ice_imp, X_true, mask).cpu().numpy())
         ice_scores['RMSE'].append(RMSE(ice_imp, X_true, mask).cpu().numpy())
@@ -245,16 +286,26 @@ if __name__ == "__main__":
             logging.info(f'ice imputation:\t'
                          f'MAE: {ice_scores["MAE"][-1]:.4f}\t'
                          f'RMSE: {ice_scores["RMSE"][-1]:.4f}\t'
-                         f'OT: {ice_scores["OT"][-1]:.4f}')
+                         f'OT: {ice_scores["OT"][-1]:.4f}\t'
+                         f'Time: {ice_scores["runtime"][-1]:.4f}s\t'
+                         f'Mem: {ice_scores["memory"][-1]:.2f}MB')
         else:
             logging.info(f'ice imputation:\t'
                          f'MAE: {ice_scores["MAE"][-1]:.4f}\t'
-                         f'RMSE: {ice_scores["RMSE"][-1]:.4f}')
+                         f'RMSE: {ice_scores["RMSE"][-1]:.4f}\t'
+                         f'Time: {ice_scores["runtime"][-1]:.4f}s\t'
+                         f'Mem: {ice_scores["memory"][-1]:.2f}MB')
+
+        t_start = time.perf_counter()
+        mem_start = peak_rss_mb()
 
         cv_error, grid_lambda = cv_softimpute(data_nas, grid_len=15)
         lbda = grid_lambda[np.argmin(cv_error)]
 
         softimp = softimpute((data_nas), lbda)[1]
+
+        softimpute_scores['runtime'].append(time.perf_counter() - t_start)
+        softimpute_scores['memory'].append(peak_rss_mb() - mem_start)
 
         data["imp"]["softimpute"].append(softimp)
         softimp = torch.tensor(softimp)
@@ -270,11 +321,15 @@ if __name__ == "__main__":
             logging.info(f'softimpute:\t'
                          f'MAE: {softimpute_scores["MAE"][-1]:.4f}\t'
                          f'RMSE: {softimpute_scores["RMSE"][-1]:.4f}\t'
-                         f'OT: {softimpute_scores["OT"][-1]:.4f}')
+                         f'OT: {softimpute_scores["OT"][-1]:.4f}\t'
+                         f'Time: {softimpute_scores["runtime"][-1]:.4f}s\t'
+                         f'Mem: {softimpute_scores["memory"][-1]:.2f}MB')
         else:
             logging.info(f'softimpute:\t'
                          f'MAE: {softimpute_scores["MAE"][-1]:.4f}\t '
-                         f'RMSE: {softimpute_scores["RMSE"][-1]:.4f}')
+                         f'RMSE: {softimpute_scores["RMSE"][-1]:.4f}\t'
+                         f'Time: {softimpute_scores["runtime"][-1]:.4f}s\t'
+                         f'Mem: {softimpute_scores["memory"][-1]:.2f}MB')
 
         ### Automatic epsilon
 
