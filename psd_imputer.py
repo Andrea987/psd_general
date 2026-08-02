@@ -6,6 +6,7 @@ given its observed entries (see marginalize_condition.condition and sampling.mea
 """
 
 import numpy as np
+from sklearn.impute import SimpleImputer
 
 from alternating_minimization import alternating_minimization
 from marginalize_condition import condition
@@ -13,7 +14,7 @@ from sampling import mean as model_mean, check_normalized
 
 
 def fit_psd_model(dataset, masks, m, eta_init, alpha, lbd, mu, l_rate_nodes, l_rate_param,
-                   nbr_bounce, nbr_gradient_steps, seed=0):
+                   nbr_bounce, nbr_gradient_steps, nbr_newton_step_Q, seed=0):
     """
     :param dataset: (n, d) data; entries on the missing (masks == True) positions are never read
     :param masks: (n, d) boolean (or 0/1), True/1 = missing
@@ -34,27 +35,32 @@ def fit_psd_model(dataset, masks, m, eta_init, alpha, lbd, mu, l_rate_nodes, l_r
         the Newton-for-Q step, see alternating_minimization)
     :param nbr_gradient_steps: number of gradient steps taken on [anchor_nodes, precision] per
         outer iteration, with Q held fixed at that iteration's Q*
+    :param nbr_newton_step_Q: maximum number of Newton iterations for each inner Q update
+        (see optimization.newton_method)
     :param seed: seed fixing the randomness of the initial anchor_nodes/Q
     :return: (Q, anchor_nodes, precision, history), see alternating_minimization
     """
     n, d = dataset.shape
     rng = np.random.default_rng(seed)
 
-    observed = ~np.asarray(masks, dtype=bool)
-    low = np.array([dataset[observed[:, j], j].min() if observed[:, j].any() else -1.0 for j in range(d)])
-    high = np.array([dataset[observed[:, j], j].max() if observed[:, j].any() else 1.0 for j in range(d)])
+    masks_bool = np.asarray(masks, dtype=bool)
+    dataset_nan = np.where(masks_bool, np.nan, dataset)
+    initial_imputed = SimpleImputer(strategy='mean').fit_transform(dataset_nan)
 
-    anchor_nodes = rng.uniform(low, high, size=(m, d))
+    anchor_idx = rng.choice(n, size=m, replace=(m > n))
+    anchor_nodes = initial_imputed[anchor_idx].copy()
     precision = np.full(d, eta_init)
 
-    L = rng.standard_normal((m, m))
-    Q0 = L @ L.T + np.eye(m) * 2  # PD starting point, alternating_minimization renormalizes it
+    # L = rng.standard_normal((m, m))
+    # Q0 = L @ L.T + np.eye(m) * 2  # PD starting point, alternating_minimization renormalizes it
+    Q0 = np.eye(m)  # identity starting point, alternating_minimization renormalizes it
 
     info = {
         'dataset': dataset, 'masks': masks, 'anchor_nodes': anchor_nodes, 'precision': precision,
         'Q': Q0, 'alpha': alpha, 'lbd': lbd, 'mu': mu,
         'l_rate_nodes': l_rate_nodes, 'l_rate_param': l_rate_param,
         'nbr_bounce': nbr_bounce, 'nbr_gradient_steps': nbr_gradient_steps,
+        'max_iter': nbr_newton_step_Q,
     }
     Q, anchor_nodes, precision, history = alternating_minimization(info)
     check_normalized(anchor_nodes, precision, Q)
@@ -62,12 +68,13 @@ def fit_psd_model(dataset, masks, m, eta_init, alpha, lbd, mu, l_rate_nodes, l_r
 
 
 def psd_impute(X_nas, mask, m=50, eta_init=2.0, alpha=1e-6, lbd=1e-4, mu=1e-4,
-               l_rate_nodes=1e-1, l_rate_param=1e-2, nbr_bounce=30, nbr_gradient_steps=5, seed=0):
+               l_rate_nodes=1e-1, l_rate_param=1e-2, nbr_bounce=30, nbr_gradient_steps=5,
+               nbr_newton_step_Q=100, seed=0):
     """
     :param X_nas: (n, d) data, NaN on the missing entries
     :param mask: (n, d) boolean (or 0/1), True/1 = missing
     :param m, eta_init, alpha, lbd, mu, l_rate_nodes, l_rate_param, nbr_bounce,
-        nbr_gradient_steps, seed: see fit_psd_model
+        nbr_gradient_steps, nbr_newton_step_Q, seed: see fit_psd_model
     :return: (X_imputed, history) -- X_imputed is (n, d) with the missing entries filled in,
         observed entries left untouched
     """
@@ -78,7 +85,7 @@ def psd_impute(X_nas, mask, m=50, eta_init=2.0, alpha=1e-6, lbd=1e-4, mu=1e-4,
     dataset = np.where(mask, 0.0, X_nas)  # dummy value on missing entries, ignored by K_S/H_NS
     Q, W, eta, history = fit_psd_model(
         dataset, mask.astype(float), m, eta_init, alpha, lbd, mu,
-        l_rate_nodes, l_rate_param, nbr_bounce, nbr_gradient_steps, seed=seed,
+        l_rate_nodes, l_rate_param, nbr_bounce, nbr_gradient_steps, nbr_newton_step_Q, seed=seed,
     )
 
     X_imputed = dataset.copy()

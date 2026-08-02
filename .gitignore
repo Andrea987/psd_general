@@ -1,6 +1,11 @@
 .venv/
+.venv312/
+datasets/
+exps/
 *.png
 *.jpg
 *.jpeg
+*.pkl
 __pycache__/
 *.pyc
+.DS_Store
