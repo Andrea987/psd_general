@@ -45,7 +45,9 @@ def alternating_minimization(info):
     run Newton's method on general_loss to find the optimal Q*; (2) with Q held fixed at Q*, take
     nbr_gradient_steps gradient steps on anchor_nodes and precision on the Lagrangian (see
     general_lagrangian_gradient_anchor_nodes/precision -- omega^* is held fixed there, not
-    differentiated through, by the envelope theorem).
+    differentiated through, by the envelope theorem). The last outer iteration only does step (1):
+    anchor_nodes/precision are left untouched after the final Q* is found, so the function returns
+    Q optimized against the anchor_nodes/precision of the second-to-last iteration.
 
     returns: (Q, anchor_nodes, precision, history), history a list of (loss, lagrangian) pairs,
         one per outer iteration, recorded right after each Newton-for-Q phase
@@ -59,7 +61,7 @@ def alternating_minimization(info):
     info = dict(info)  # local copy: 'Q', 'anchor_nodes', 'precision' are updated in place below
     history = []
 
-    for _ in range(nbr_bounce):
+    for step in range(nbr_bounce):
         # fix anchor_nodes/precision, renormalize Q so it is feasible for the current H, then run
         # Newton's method to find the optimal Q* -- A, A_0, H don't change during this phase, so
         # they are computed once and plugged into the plain (non-"general_") Newton machinery
@@ -71,6 +73,7 @@ def alternating_minimization(info):
 
         trace_Q_star_H = np.einsum('kl,kl->', Q_star, H)
         assert np.isclose(trace_Q_star_H, 1), f"Tr(Q* H) = {trace_Q_star_H}, expected 1"
+        print("trace(Qˆ* H) in alteranating minimization ", trace_Q_star_H)
         info['Q'] = Q_star
 
         history.append((
@@ -78,11 +81,13 @@ def alternating_minimization(info):
             lagrangian_fixed(info['Q'], info['anchor_nodes'], info['precision']),
         ))
 
-        # gradient steps on [anchor_nodes, precision], with Q held fixed at Q*
-        for _ in range(nbr_gradient_steps):
-            grad_W = general_lagrangian_gradient_anchor_nodes(info)
-            grad_eta = general_lagrangian_gradient_precision(info)
-            info['anchor_nodes'] = info['anchor_nodes'] - l_rate_nodes * grad_W
-            info['precision'] = info['precision'] - l_rate_param * grad_eta
+        # gradient steps on [anchor_nodes, precision], with Q held fixed at Q* -- skipped on the
+        # last bounce, which should optimize Q only and leave anchor_nodes/precision untouched
+        if step < nbr_bounce - 1:
+            for _ in range(nbr_gradient_steps):
+                grad_W = general_lagrangian_gradient_anchor_nodes(info)
+                grad_eta = general_lagrangian_gradient_precision(info)
+                info['anchor_nodes'] = info['anchor_nodes'] - l_rate_nodes * grad_W
+                info['precision'] = info['precision'] - l_rate_param * grad_eta
 
     return info['Q'], info['anchor_nodes'], info['precision'], history
