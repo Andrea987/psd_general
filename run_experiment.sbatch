@@ -13,7 +13,7 @@
 source /home/$USER/miniconda3/etc/profile.d/conda.sh
 conda activate psd_general
 
-python main_real_dataset.py \
+python3 -u main_real_dataset.py \
     --dataset iris \
     --nexp 5 \
     --out_dir exps
