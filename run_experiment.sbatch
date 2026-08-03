@@ -10,8 +10,7 @@
 #SBATCH --time=01:00:00
 #SBATCH --output=%x_%j.log
 
-source /home/$USER/.bashrc
-conda activate psd_general
+source /scratch/$USER/psd_general/.venv/bin/activate
 
 python main_real_dataset.py \
     --dataset iris \
