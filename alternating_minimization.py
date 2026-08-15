@@ -89,8 +89,6 @@ def alternating_minimization(info):
         # last bounce, which should optimize Q only and leave anchor_nodes/precision untouched
         if step < nbr_bounce - 1:
             for grad_step in range(nbr_gradient_steps):
-                if verbose and grad_step % 5 == 0:
-                    print(f"  Gradient step {grad_step + 1}/{nbr_gradient_steps}")
                 grad_W = general_lagrangian_gradient_anchor_nodes(info)
                 grad_eta = general_lagrangian_gradient_precision(info)
                 info['anchor_nodes'] = info['anchor_nodes'] - l_rate_nodes * grad_W

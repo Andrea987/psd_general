@@ -26,14 +26,11 @@ def newton_method(info):
     max_iter = info.get('max_iter', 100)
     alpha_backtracking = info.get('alpha_backtracking', 0.1)
     beta_backtracking = info.get('beta_backtracking', 0.8)
-    verbose = info.get('verbose', False)
 
     Q = info['Q']
     history = []
 
     for i in range(max_iter):
-        if verbose and i % 5 == 0:
-            print(f"    Newton iteration {i + 1}/{max_iter}")
         info = {**info, 'Q': Q}
         DQ, nu, lambda_Q_squared = newton_step_and_decrement(info)
         f_Q = loss(info)
