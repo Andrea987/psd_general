@@ -97,3 +97,4 @@ def psd_impute(X_nas, mask, m=50, eta_init=2.0, alpha=1e-6, lbd=1e-4, mu=1e-4,
         X_imputed[i, row_mask] = model_mean(W_ns, eta_ns, Q_cond)
 
     return X_imputed, history
+

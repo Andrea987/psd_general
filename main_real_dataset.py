@@ -39,6 +39,8 @@ import argparse
 import logging
 
 parser = argparse.ArgumentParser()
+parser.add_argument('--seed', type=int, default=42,
+                    help='seed for reproducibility')
 parser.add_argument('--out_path', type=str, default=None,
                     help='filename for the results')
 parser.add_argument('--out_data', type=str, default=None,
@@ -108,6 +110,9 @@ parser.add_argument('--psd_newton_step_Q', type=int, default=50,
 
 args = parser.parse_args()
 
+np.random.seed(args.seed)
+torch.manual_seed(args.seed)
+
 if torch.cuda.is_available():
     torch.set_default_tensor_type('torch.cuda.DoubleTensor')
 else:
@@ -161,8 +166,7 @@ if __name__ == "__main__":
 
     p = args.p
 
-    data = {"p": p, "mask": [], "M": [], "train_set": [], "test_set": [],
-            "epsilon": [], "imp": {}, "params": vars(args)}
+    data = {"p": p, "M": [], "epsilon": [], "imp": {}, "params": vars(args)}
 
     for meth in METHODS:
         data["imp"][meth] = []
@@ -180,9 +184,6 @@ if __name__ == "__main__":
         X_true_test = torch.tensor(test_set)
         n_train = ground_truth.shape[0]
         n_test = test_set.shape[0]
-
-        data["train_set"].append(ground_truth)
-        data["test_set"].append(test_set)
 
         ### Each entry from the second axis has a probability p of being NA
 
@@ -205,7 +206,6 @@ if __name__ == "__main__":
         M = mask.sum(1) > 0
         nimp = M.sum().item()
 
-        data["mask"].append(mask.detach().cpu().numpy())
         data["M"].append(M.detach().cpu().numpy())
 
         data_nas = X_nas.cpu().numpy()
@@ -224,7 +224,7 @@ if __name__ == "__main__":
             m=args.psd_m, eta_init=args.psd_eta, alpha=args.psd_alpha, lbd=psd_lbd,
             mu=psd_mu, l_rate_nodes=args.psd_lr_nodes, l_rate_param=args.psd_lr_param,
             nbr_bounce=args.psd_bounce, nbr_gradient_steps=args.psd_gradient_steps,
-            nbr_newton_step_Q=args.psd_newton_step_Q, seed=n,
+            nbr_newton_step_Q=args.psd_newton_step_Q, seed=args.seed + n,
         )
 
         psd_runtime = time.perf_counter() - t_start
@@ -533,12 +533,26 @@ if __name__ == "__main__":
     # scores['lin_rr'] = lin_rr_scores  # skipped for smoke test (neural network based method)
     # scores['mlp_rr'] = mlp_rr_scores  # skipped for smoke test (neural network based method)
 
+    mean_sd = {}
+    for method, method_scores in scores.items():
+        method_mean_sd = {}
+        for metric, values in method_scores.items():
+            if len(values) > 0:
+                method_mean_sd[metric] = {'mean': np.mean(values), 'std': np.std(values)}
+        mean_sd[method] = method_mean_sd
+        logging.info(f'{method} averaged over {args.nexp} run(s):')
+        for metric, stats in method_mean_sd.items():
+            logging.info(f'  {metric}: mean {stats["mean"]:.4f}  std {stats["std"]:.4f}')
+
     if args.out_path is None:
         score_file = "_".join([dataset, "scores.pkl"])
     else:
         score_file = args.out_path
 
     pkl.dump(scores, open(os.path.join(args.out_dir, score_file), 'wb'))
+
+    mean_std_file = "_".join([dataset, "mean_std.pkl"])
+    pkl.dump(mean_sd, open(os.path.join(args.out_dir, mean_std_file), 'wb'))
 
     if args.out_data is None:
         data_file = "_".join([dataset, "data.pkl"])
