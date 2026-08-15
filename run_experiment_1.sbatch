@@ -76,6 +76,7 @@ python3 -u main_real_dataset.py \
     --psd_lr_param=1e-4 \
     --psd_bounce=50 \
     --psd_gradient_steps=5 \
-    --psd_newton_step_Q=50
+    --psd_newton_step_Q=50 \
+    --verbose
 
 
