@@ -197,6 +197,16 @@ if __name__ == "__main__":
         X_true_test = torch.tensor(test_set)
         n_train = ground_truth.shape[0]
         n_test = test_set.shape[0]
+        n_total = n_train + n_test
+        n_features = ground_truth.shape[1]
+
+        logging.info(f"dataset: {dataset}\t"
+                     f"features: {n_features}\t"
+                     f"total obs: {n_total}\t"
+                     f"train obs: {n_train}\t"
+                     f"test obs: {n_test}\t"
+                     f"test split: {args.perc_test_set:.2%}\t"
+                     f"train missingness (p): {p:.2%}")
 
         ### Each entry from the second axis has a probability p of being NA
 
@@ -439,11 +449,17 @@ if __name__ == "__main__":
 
         logging.info("Sinkhorn Imputation")
 
+        t_start = time.perf_counter()
+        mem_start = peak_rss_mb()
+
         sk_imputer = OTimputer(eps=epsilon, niter=args.sinkhorn_niter, batchsize=batchsize, lr=args.lr)
 
         sk_imp, _, _ = sk_imputer.fit_transform(X_nas.clone(), report_interval=args.report_interval,
                                      verbose=True, X_true=X_true)
         sk_imp = sk_imp.detach()
+
+        ot_scores['runtime'].append(time.perf_counter() - t_start)
+        ot_scores['memory'].append(peak_rss_mb() - mem_start)
 
         ot_scores['MAE'].append(MAE(sk_imp, X_true, mask).item())
         ot_scores['RMSE'].append(RMSE(sk_imp, X_true, mask).item())
@@ -458,16 +474,23 @@ if __name__ == "__main__":
                          f"MAE: {ot_scores['MAE'][-1]:.4f}\t"
                          f"RMSE: {ot_scores['RMSE'][-1]:.4f}\t"
                          f"OT: {ot_scores['OT'][-1]:.4f}\t"
-                         f"ED: {ot_scores['ED'][-1]:.4f}")
+                         f"ED: {ot_scores['ED'][-1]:.4f}\t"
+                         f"Time: {ot_scores['runtime'][-1]:.4f}s\t"
+                         f"Mem: {ot_scores['memory'][-1]:.2f}MB")
         else:
             logging.info(f"Sinkhorn imputation:\t "
                          f"MAE: {ot_scores['MAE'][-1]:.4f}\t"
                          f"RMSE: {ot_scores['RMSE'][-1]:.4f}\t"
-                         f"ED: {ot_scores['ED'][-1]:.4f}")
+                         f"ED: {ot_scores['ED'][-1]:.4f}\t"
+                         f"Time: {ot_scores['runtime'][-1]:.4f}s\t"
+                         f"Mem: {ot_scores['memory'][-1]:.2f}MB")
 
         data["imp"]["OT"].append(sk_imp[mask.bool()].detach().cpu().numpy())
 
         logging.info("Linear Round Robin Imputation")
+
+        t_start = time.perf_counter()
+        mem_start = peak_rss_mb()
 
         n_, d = X_true.shape
 
@@ -491,6 +514,9 @@ if __name__ == "__main__":
         lin_imp, _, _ = linear_rr_imputer.fit_transform(X_nas.clone(), report_interval=1, verbose=True, X_true=X_true)
         lin_imp = lin_imp.detach()
 
+        lin_rr_scores['runtime'].append(time.perf_counter() - t_start)
+        lin_rr_scores['memory'].append(peak_rss_mb() - mem_start)
+
         lin_rr_scores['MAE'].append(MAE(lin_imp, X_true, mask).item())
         lin_rr_scores['RMSE'].append(RMSE(lin_imp, X_true, mask).item())
         lin_rr_scores['ED'].append(energy_distance(lin_imp.detach().cpu().numpy(), X_true.detach().cpu().numpy()))
@@ -503,16 +529,23 @@ if __name__ == "__main__":
                          f"MAE: {lin_rr_scores['MAE'][-1]:.4f}\t"
                          f"RMSE: {lin_rr_scores['RMSE'][-1]:.4f}\t"
                          f"OT: {lin_rr_scores['OT'][-1]:.4f}\t"
-                         f"ED: {lin_rr_scores['ED'][-1]:.4f}")
+                         f"ED: {lin_rr_scores['ED'][-1]:.4f}\t"
+                         f"Time: {lin_rr_scores['runtime'][-1]:.4f}s\t"
+                         f"Mem: {lin_rr_scores['memory'][-1]:.2f}MB")
         else:
             logging.info(f"Linear RR imputation:\t"
                          f"MAE: {lin_rr_scores['MAE'][-1]:.4f}\t"
                          f"RMSE: {lin_rr_scores['RMSE'][-1]:.4f}\t"
-                         f"ED: {lin_rr_scores['ED'][-1]:.4f}")
+                         f"ED: {lin_rr_scores['ED'][-1]:.4f}\t"
+                         f"Time: {lin_rr_scores['runtime'][-1]:.4f}s\t"
+                         f"Mem: {lin_rr_scores['memory'][-1]:.2f}MB")
 
         data["imp"]["lin_rr"].append(lin_imp[mask.bool()].detach().cpu().numpy())
 
         logging.info("MLP Round Robin Imputation")
+
+        t_start = time.perf_counter()
+        mem_start = peak_rss_mb()
 
         n_, d = X_true.shape
         d_ = d - 1
@@ -543,6 +576,9 @@ if __name__ == "__main__":
         mlp_imp, _, _ = mlp_rr_imputer.fit_transform(X_nas.clone(), report_interval=1, verbose=True, X_true=X_true)
         mlp_imp = mlp_imp.detach()
 
+        mlp_rr_scores['runtime'].append(time.perf_counter() - t_start)
+        mlp_rr_scores['memory'].append(peak_rss_mb() - mem_start)
+
         mlp_rr_scores['MAE'].append(MAE(mlp_imp, X_true, mask).item())
         mlp_rr_scores['RMSE'].append(RMSE(mlp_imp, X_true, mask).item())
         mlp_rr_scores['ED'].append(energy_distance(mlp_imp.detach().cpu().numpy(), X_true.detach().cpu().numpy()))
@@ -555,12 +591,16 @@ if __name__ == "__main__":
                          f"MAE: {mlp_rr_scores['MAE'][-1]:.4f}\t"
                          f"RMSE: {mlp_rr_scores['RMSE'][-1]:.4f}\t"
                          f"OT: {mlp_rr_scores['OT'][-1]:.4f}\t"
-                         f"ED: {mlp_rr_scores['ED'][-1]:.4f}")
+                         f"ED: {mlp_rr_scores['ED'][-1]:.4f}\t"
+                         f"Time: {mlp_rr_scores['runtime'][-1]:.4f}s\t"
+                         f"Mem: {mlp_rr_scores['memory'][-1]:.2f}MB")
         else:
             logging.info(f"MLP RR imputation:\t"
                          f"MAE: {mlp_rr_scores['MAE'][-1]:.4f}\t"
                          f"RMSE: {mlp_rr_scores['RMSE'][-1]:.4f}\t"
-                         f"ED: {mlp_rr_scores['ED'][-1]:.4f}")
+                         f"ED: {mlp_rr_scores['ED'][-1]:.4f}\t"
+                         f"Time: {mlp_rr_scores['runtime'][-1]:.4f}s\t"
+                         f"Mem: {mlp_rr_scores['memory'][-1]:.2f}MB")
 
         data["imp"]["mlp_rr"].append(mlp_imp[mask.bool()].detach().cpu().numpy())
 
