@@ -70,9 +70,11 @@ python3 -u main_real_dataset.py \
     --psd_eta=1.6 \
     --psd_alpha=1e-6 \
     --psd_lbd=1e-1 \
-    --psd_mu=1e-1 \
+    --psd_mu=1e-4 \
     --psd_lr_nodes=0.001 \
     --psd_lr_param=1e-4 \
     --psd_bounce=60 \
     --psd_gradient_steps=5 \
     --psd_newton_step_Q=50
+
+

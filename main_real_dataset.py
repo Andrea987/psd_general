@@ -16,9 +16,12 @@ import copy
 import time
 import resource
 
+from scipy.spatial.distance import cdist
+
 from sklearn.preprocessing import scale
 from sklearn.experimental import enable_iterative_imputer
 from sklearn.impute import IterativeImputer
+from sklearn.model_selection import train_test_split
 
 # MissingDataOT_master/imputers.py does a bare "from utils import ..." internally, assuming it is
 # run from inside that folder rather than imported as a subpackage -- add the folder itself to
@@ -68,6 +71,8 @@ parser.add_argument('--nexp', type=int, default=1,
                     help='number of experiences per parameter setting')
 parser.add_argument('--dataset', type=str, default="iris",
                     help='dataset on which to run the experiments')
+parser.add_argument('--perc_test_set', type=float, default=0,
+                    help='percentage of dataset held out as a test set')
 parser.add_argument('--p', type=float, default=0.3, help='Proportion of imps')
 parser.add_argument('--MAR', action='store_true')
 parser.add_argument('--p_obs', type=float, default=0.3,
@@ -120,14 +125,21 @@ def peak_rss_mb():
     maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return maxrss / (1024 ** 2) if sys.platform == 'darwin' else maxrss / 1024
 
+
+def energy_distance(X, Y):
+    """Energy distance (Szekely & Rizzo) between two point clouds."""
+    dist_XY = cdist(X, Y)
+    dist_XX = cdist(X, X)
+    dist_YY = cdist(Y, Y)
+    return 2 * dist_XY.mean() - dist_XX.mean() - dist_YY.mean()
+
 if __name__ == "__main__":
 
     OTLIM = 5000
 
     dataset = args.dataset
 
-    ground_truth = scale(dataset_loader(dataset))
-    X_true = torch.tensor(ground_truth)
+    dataset_loaded = scale(dataset_loader(dataset))
 
     METHODS = ["psd", "OT", "ice", "mean", "softimpute", "lin_rr", "mlp_rr"]
 
@@ -143,13 +155,13 @@ if __name__ == "__main__":
                    lin_rr_scores, mlp_rr_scores]
 
     for dic in score_dicts:
-        for metric in ['MAE', 'RMSE', 'OT', 'runtime', 'memory']:
+        for metric in ['MAE', 'RMSE', 'OT', 'OT_test', 'ED', 'runtime', 'memory']:
             dic[metric] = []
     psd_scores['avg_bounce_time'] = []
 
     p = args.p
 
-    data = {"p": p, "ground_truth": ground_truth, "mask": [], "M": [],
+    data = {"p": p, "mask": [], "M": [], "train_set": [], "test_set": [],
             "epsilon": [], "imp": {}, "params": vars(args)}
 
     for meth in METHODS:
@@ -158,6 +170,19 @@ if __name__ == "__main__":
     batchsize = args.batchsize
 
     for n in range(args.nexp):
+
+        if args.perc_test_set > 0:
+            ground_truth, test_set = train_test_split(dataset_loaded, test_size=args.perc_test_set)
+        else:
+            ground_truth = dataset_loaded
+            test_set = np.array([])
+        X_true = torch.tensor(ground_truth)
+        X_true_test = torch.tensor(test_set)
+        n_train = ground_truth.shape[0]
+        n_test = test_set.shape[0]
+
+        data["train_set"].append(ground_truth)
+        data["test_set"].append(test_set)
 
         ### Each entry from the second axis has a probability p of being NA
 
@@ -213,15 +238,22 @@ if __name__ == "__main__":
 
         psd_scores['MAE'].append(MAE(psd_imp, X_true, mask).item())
         psd_scores['RMSE'].append(RMSE(psd_imp, X_true, mask).item())
+        psd_scores['ED'].append(energy_distance(psd_imp.detach().cpu().numpy(), X_true.detach().cpu().numpy()))
         if nimp < OTLIM:
             dists = ((psd_imp[M][:, None] - X_true[M]) ** 2).sum(2) / 2.
             psd_scores['OT'].append(ot.emd2(np.ones(nimp) / nimp,
                                             np.ones(nimp) / nimp,
                                             dists.cpu().numpy()))
+            if n_test > 0:
+                dists_test = ((psd_imp[:, None, :] - X_true_test) ** 2).sum(2) / 2.
+                psd_scores['OT_test'].append(ot.emd2(np.ones(n_train) / n_train,
+                                                     np.ones(n_test) / n_test,
+                                                     dists_test.cpu().numpy()))
             logging.info(f'psd imputation:\t '
                          f'MAE: {psd_scores["MAE"][-1]:.4f}\t'
                          f'RMSE: {psd_scores["RMSE"][-1]:.4f}\t'
                          f'OT: {psd_scores["OT"][-1]:.4f}\t'
+                         f'ED: {psd_scores["ED"][-1]:.4f}\t'
                          f'Time: {psd_runtime:.4f}s\t'
                          f'Time/bounce: {psd_scores["avg_bounce_time"][-1]:.4f}s\t'
                          f'Mem: {psd_scores["memory"][-1]:.2f}MB')
@@ -229,6 +261,7 @@ if __name__ == "__main__":
             logging.info(f'psd imputation:\t '
                          f'MAE: {psd_scores["MAE"][-1]:.4f}\t'
                          f'RMSE: {psd_scores["RMSE"][-1]:.4f}\t'
+                         f'ED: {psd_scores["ED"][-1]:.4f}\t'
                          f'Time: {psd_runtime:.4f}s\t'
                          f'Time/bounce: {psd_scores["avg_bounce_time"][-1]:.4f}s\t'
                          f'Mem: {psd_scores["memory"][-1]:.2f}MB')
@@ -245,22 +278,30 @@ if __name__ == "__main__":
 
         mean_scores['MAE'].append(MAE(mean_imp, X_true, mask).cpu().numpy())
         mean_scores['RMSE'].append(RMSE(mean_imp, X_true, mask).cpu().numpy())
+        mean_scores['ED'].append(energy_distance(mean_imp.detach().cpu().numpy(), X_true.detach().cpu().numpy()))
         if nimp < OTLIM:
             dists = ((mean_imp[M][:, None] - X_true[M]) ** 2).sum(2) / 2.
             mean_scores['OT'].append(ot.emd2(np.ones(nimp) / nimp,
                                              np.ones(nimp) / nimp,
                                              dists.cpu().numpy()))
+            if n_test > 0:
+                dists_test = ((mean_imp[:, None, :] - X_true_test) ** 2).sum(2) / 2.
+                mean_scores['OT_test'].append(ot.emd2(np.ones(n_train) / n_train,
+                                                      np.ones(n_test) / n_test,
+                                                      dists_test.cpu().numpy()))
 
             logging.info(f'mean imputation:\t '
                          f'MAE: {mean_scores["MAE"][-1]:.4f}\t'
                          f'RMSE: {mean_scores["RMSE"][-1]:.4f}\t'
                          f'OT: {mean_scores["OT"][-1]:.4f}\t'
+                         f'ED: {mean_scores["ED"][-1]:.4f}\t'
                          f'Time: {mean_scores["runtime"][-1]:.4f}s\t'
                          f'Mem: {mean_scores["memory"][-1]:.2f}MB')
         else:
             logging.info(f'mean imputation:\t '
                          f'MAE: {mean_scores["MAE"][-1]:.4f}\t'
                          f'RMSE: {mean_scores["RMSE"][-1]:.4f}\t'
+                         f'ED: {mean_scores["ED"][-1]:.4f}\t'
                          f'Time: {mean_scores["runtime"][-1]:.4f}s\t'
                          f'Mem: {mean_scores["memory"][-1]:.2f}MB')
 
@@ -278,21 +319,29 @@ if __name__ == "__main__":
 
         ice_scores['MAE'].append(MAE(ice_imp, X_true, mask).cpu().numpy())
         ice_scores['RMSE'].append(RMSE(ice_imp, X_true, mask).cpu().numpy())
+        ice_scores['ED'].append(energy_distance(ice_imp.detach().cpu().numpy(), X_true.detach().cpu().numpy()))
         if nimp < OTLIM:
             dists = ((ice_imp[M][:, None] - X_true[M]) ** 2).sum(2) / 2.
             ice_scores['OT'].append(ot.emd2(np.ones(nimp) / nimp,
                                             np.ones(nimp) / nimp,
                                             dists.cpu().numpy()))
+            if n_test > 0:
+                dists_test = ((ice_imp[:, None, :] - X_true_test) ** 2).sum(2) / 2.
+                ice_scores['OT_test'].append(ot.emd2(np.ones(n_train) / n_train,
+                                                     np.ones(n_test) / n_test,
+                                                     dists_test.cpu().numpy()))
             logging.info(f'ice imputation:\t'
                          f'MAE: {ice_scores["MAE"][-1]:.4f}\t'
                          f'RMSE: {ice_scores["RMSE"][-1]:.4f}\t'
                          f'OT: {ice_scores["OT"][-1]:.4f}\t'
+                         f'ED: {ice_scores["ED"][-1]:.4f}\t'
                          f'Time: {ice_scores["runtime"][-1]:.4f}s\t'
                          f'Mem: {ice_scores["memory"][-1]:.2f}MB')
         else:
             logging.info(f'ice imputation:\t'
                          f'MAE: {ice_scores["MAE"][-1]:.4f}\t'
                          f'RMSE: {ice_scores["RMSE"][-1]:.4f}\t'
+                         f'ED: {ice_scores["ED"][-1]:.4f}\t'
                          f'Time: {ice_scores["runtime"][-1]:.4f}s\t'
                          f'Mem: {ice_scores["memory"][-1]:.2f}MB')
 
@@ -313,21 +362,30 @@ if __name__ == "__main__":
             MAE(softimp, X_true, mask).cpu().numpy())
         softimpute_scores['RMSE'].append(
             RMSE(softimp, X_true, mask).cpu().numpy())
+        softimpute_scores['ED'].append(
+            energy_distance(softimp.detach().cpu().numpy(), X_true.detach().cpu().numpy()))
         if nimp < OTLIM:
             dists = ((softimp[M][:, None] - X_true[M]) ** 2).sum(2) / 2.
             softimpute_scores['OT'].append(ot.emd2(np.ones(nimp) / nimp,
                                                    np.ones(nimp) / nimp,
                                                    dists.cpu().numpy()))
+            if n_test > 0:
+                dists_test = ((softimp[:, None, :] - X_true_test) ** 2).sum(2) / 2.
+                softimpute_scores['OT_test'].append(ot.emd2(np.ones(n_train) / n_train,
+                                                             np.ones(n_test) / n_test,
+                                                             dists_test.cpu().numpy()))
             logging.info(f'softimpute:\t'
                          f'MAE: {softimpute_scores["MAE"][-1]:.4f}\t'
                          f'RMSE: {softimpute_scores["RMSE"][-1]:.4f}\t'
                          f'OT: {softimpute_scores["OT"][-1]:.4f}\t'
+                         f'ED: {softimpute_scores["ED"][-1]:.4f}\t'
                          f'Time: {softimpute_scores["runtime"][-1]:.4f}s\t'
                          f'Mem: {softimpute_scores["memory"][-1]:.2f}MB')
         else:
             logging.info(f'softimpute:\t'
                          f'MAE: {softimpute_scores["MAE"][-1]:.4f}\t '
                          f'RMSE: {softimpute_scores["RMSE"][-1]:.4f}\t'
+                         f'ED: {softimpute_scores["ED"][-1]:.4f}\t'
                          f'Time: {softimpute_scores["runtime"][-1]:.4f}s\t'
                          f'Mem: {softimpute_scores["memory"][-1]:.2f}MB')
 
