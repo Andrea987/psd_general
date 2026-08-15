@@ -17,6 +17,7 @@ conda activate psd_general
 # main_real_dataset.py parameters:
 #   --p                    probability of missing components
 #   --nexp                 number of experiments
+#   --perc_test_set        percentage of dataset held out as a test set
 #   --sinkhorn_niter       number of Sinkhorn iterations
 #   --psd_m                number of anchor nodes
 #   --psd_eta              initial precision of the Gaussians
@@ -64,13 +65,14 @@ python3 -u main_real_dataset.py \
     --dataset=${dataset} \
     --p=0.4 \
     --nexp=2 \
-    --sinkhorn_niter=30 \
-    --psd_m=65 \
-    --psd_eta=1.6 \
+    --perc_test_set=0.2 \
+    --sinkhorn_niter=3000 \
+    --psd_m=80 \
+    --psd_eta=1.5 \
     --psd_alpha=1e-6 \
     --psd_lbd=1e-1 \
     --psd_mu=1e-4 \
-    --psd_lr_nodes=0.001 \
+    --psd_lr_nodes=1e-3 \
     --psd_lr_param=1e-4 \
     --psd_bounce=60 \
     --psd_gradient_steps=5 \

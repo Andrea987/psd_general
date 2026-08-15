@@ -411,135 +411,141 @@ if __name__ == "__main__":
 
         data["epsilon"].append(epsilon)
 
-        # Skipped for smoke test (OT method)
-        # logging.info("Sinkhorn Imputation")
-        #
-        # sk_imputer = OTimputer(eps=epsilon, niter=args.sinkhorn_niter, batchsize=batchsize, lr=args.lr)
-        #
-        # sk_imp, _, _ = sk_imputer.fit_transform(X_nas.clone(), report_interval=args.report_interval,
-        #                              verbose=True, X_true=X_true)
-        # sk_imp = sk_imp.detach()
-        #
-        # ot_scores['MAE'].append(MAE(sk_imp, X_true, mask).item())
-        # ot_scores['RMSE'].append(RMSE(sk_imp, X_true, mask).item())
-        # if nimp < OTLIM:
-        #     dists = ((sk_imp[M][:, None] - X_true[M]) ** 2).sum(2) / 2.
-        #     ot_scores['OT'].append(ot.emd2(np.ones(nimp) / nimp,
-        #                                    np.ones(nimp) / nimp, \
-        #                                    dists.cpu().numpy()))
-        #
-        #     logging.info(f"Sinkhorn imputation:\t "
-        #                  f"MAE: {ot_scores['MAE'][-1]:.4f}\t"
-        #                  f"RMSE: {ot_scores['RMSE'][-1]:.4f}\t"
-        #                  f"OT: {ot_scores['OT'][-1]:.4f}")
-        # else:
-        #     logging.info(f"Sinkhorn imputation:\t "
-        #                  f"MAE: {ot_scores['MAE'][-1]:.4f}\t"
-        #                  f"RMSE: {ot_scores['RMSE'][-1]:.4f}")
-        #
-        # data["imp"]["OT"].append(sk_imp[mask.bool()].detach().cpu().numpy())
+        logging.info("Sinkhorn Imputation")
 
-        # Skipped for smoke test (neural network based method)
-        # logging.info("Linear Round Robin Imputation")
-        #
-        # n_, d = X_true.shape
-        #
-        # models = {}
-        #
-        # for i in range(d):
-        #     ## predict the ith variable using d-1 others
-        #     models[i] = torch.nn.Linear(d - 1, 1).to(device)
-        #
-        # linear_rr_imputer = RRimputer(models, max_iter=args.max_iter,
-        #                               niter=args.rr_niter,
-        #                               n_pairs=args.n_pairs,
-        #                               batchsize=batchsize,
-        #                               lr=args.lr,
-        #                               weight_decay=args.decay,
-        #                               order="random",
-        #                               eps=epsilon,
-        #                               opt=torch.optim.Adam,
-        #                               scaling=args.scaling)
-        #
-        # lin_imp, _, _ = linear_rr_imputer.fit_transform(X_nas.clone(), report_interval=1, verbose=True, X_true=X_true)
-        # lin_imp = lin_imp.detach()
-        #
-        # lin_rr_scores['MAE'].append(MAE(lin_imp, X_true, mask).item())
-        # lin_rr_scores['RMSE'].append(RMSE(lin_imp, X_true, mask).item())
-        # if nimp < OTLIM:
-        #     dists = ((lin_imp[M][:, None] - X_true[M]) ** 2).sum(2) / 2.
-        #     lin_rr_scores['OT'].append(ot.emd2(np.ones(nimp) / nimp,
-        #                                        np.ones(nimp) / nimp,
-        #                                        dists.cpu().numpy()))
-        #     logging.info(f"Linear RR imputation:\t"
-        #                  f"MAE: {lin_rr_scores['MAE'][-1]:.4f}\t"
-        #                  f"RMSE: {lin_rr_scores['RMSE'][-1]:.4f}\t"
-        #                  f"OT: {lin_rr_scores['OT'][-1]:.4f}")
-        # else:
-        #     logging.info(f"Linear RR imputation:\t"
-        #                  f"MAE: {lin_rr_scores['MAE'][-1]:.4f}\t"
-        #                  f"RMSE: {lin_rr_scores['RMSE'][-1]:.4f}")
-        #
-        # data["imp"]["lin_rr"].append(lin_imp[mask.bool()].detach().cpu().numpy())
+        sk_imputer = OTimputer(eps=epsilon, niter=args.sinkhorn_niter, batchsize=batchsize, lr=args.lr)
 
-        # Skipped for smoke test (neural network based method)
-        # logging.info("MLP Round Robin Imputation")
-        #
-        # n_, d = X_true.shape
-        # d_ = d - 1
-        #
-        # models = {}
-        #
-        # for i in range(d):
-        #     ## predict the ith variable using d-1 others
-        #     models[i] = nn.Sequential(nn.Linear(d_, 2 * d_),
-        #                               nn.ReLU(),
-        #                               nn.Linear(2 * d_, d_),
-        #                               nn.ReLU(),
-        #                               nn.Linear(d_, 1)
-        #                               ).to(device)
-        #
-        # mlp_rr_imputer = RRimputer(models,
-        #                            max_iter=args.max_iter,
-        #                            niter=args.rr_niter,
-        #                            n_pairs=args.n_pairs,
-        #                            batchsize=batchsize,
-        #                            lr=args.lr,
-        #                            weight_decay=args.decay,
-        #                            order="random",
-        #                            eps=epsilon,
-        #                            opt=torch.optim.Adam,
-        #                            scaling=args.scaling)
-        #
-        # mlp_imp, _, _ = mlp_rr_imputer.fit_transform(X_nas.clone(), report_interval=1, verbose=True, X_true=X_true)
-        # mlp_imp = mlp_imp.detach()
-        #
-        # mlp_rr_scores['MAE'].append(MAE(mlp_imp, X_true, mask).item())
-        # mlp_rr_scores['RMSE'].append(RMSE(mlp_imp, X_true, mask).item())
-        # if nimp < OTLIM:
-        #     dists = ((mlp_imp[M][:, None] - X_true[M]) ** 2).sum(2) / 2.
-        #     mlp_rr_scores['OT'].append(ot.emd2(np.ones(nimp) / nimp,
-        #                                        np.ones(nimp) / nimp,
-        #                                        dists.cpu().numpy()))
-        #     logging.info(f"MLP RR imputation:\t"
-        #                  f"MAE: {mlp_rr_scores['MAE'][-1]:.4f}\t"
-        #                  f"RMSE: {mlp_rr_scores['RMSE'][-1]:.4f}\t"
-        #                  f"OT: {mlp_rr_scores['OT'][-1]:.4f}")
-        # else:
-        #     logging.info(f"MLP RR imputation:\t"
-        #                  f"MAE: {mlp_rr_scores['MAE'][-1]:.4f}\t"
-        #                  f"RMSE: {mlp_rr_scores['RMSE'][-1]:.4f}")
-        #
-        # data["imp"]["mlp_rr"].append(mlp_imp[mask.bool()].detach().cpu().numpy())
+        sk_imp, _, _ = sk_imputer.fit_transform(X_nas.clone(), report_interval=args.report_interval,
+                                     verbose=True, X_true=X_true)
+        sk_imp = sk_imp.detach()
+
+        ot_scores['MAE'].append(MAE(sk_imp, X_true, mask).item())
+        ot_scores['RMSE'].append(RMSE(sk_imp, X_true, mask).item())
+        ot_scores['ED'].append(energy_distance(sk_imp.detach().cpu().numpy(), X_true.detach().cpu().numpy()))
+        if nimp < OTLIM:
+            dists = ((sk_imp[M][:, None] - X_true[M]) ** 2).sum(2) / 2.
+            ot_scores['OT'].append(ot.emd2(np.ones(nimp) / nimp,
+                                           np.ones(nimp) / nimp, \
+                                           dists.cpu().numpy()))
+
+            logging.info(f"Sinkhorn imputation:\t "
+                         f"MAE: {ot_scores['MAE'][-1]:.4f}\t"
+                         f"RMSE: {ot_scores['RMSE'][-1]:.4f}\t"
+                         f"OT: {ot_scores['OT'][-1]:.4f}\t"
+                         f"ED: {ot_scores['ED'][-1]:.4f}")
+        else:
+            logging.info(f"Sinkhorn imputation:\t "
+                         f"MAE: {ot_scores['MAE'][-1]:.4f}\t"
+                         f"RMSE: {ot_scores['RMSE'][-1]:.4f}\t"
+                         f"ED: {ot_scores['ED'][-1]:.4f}")
+
+        data["imp"]["OT"].append(sk_imp[mask.bool()].detach().cpu().numpy())
+
+        logging.info("Linear Round Robin Imputation")
+
+        n_, d = X_true.shape
+
+        models = {}
+
+        for i in range(d):
+            ## predict the ith variable using d-1 others
+            models[i] = torch.nn.Linear(d - 1, 1).to(device)
+
+        linear_rr_imputer = RRimputer(models, max_iter=args.max_iter,
+                                      niter=args.rr_niter,
+                                      n_pairs=args.n_pairs,
+                                      batchsize=batchsize,
+                                      lr=args.lr,
+                                      weight_decay=args.decay,
+                                      order="random",
+                                      eps=epsilon,
+                                      opt=torch.optim.Adam,
+                                      scaling=args.scaling)
+
+        lin_imp, _, _ = linear_rr_imputer.fit_transform(X_nas.clone(), report_interval=1, verbose=True, X_true=X_true)
+        lin_imp = lin_imp.detach()
+
+        lin_rr_scores['MAE'].append(MAE(lin_imp, X_true, mask).item())
+        lin_rr_scores['RMSE'].append(RMSE(lin_imp, X_true, mask).item())
+        lin_rr_scores['ED'].append(energy_distance(lin_imp.detach().cpu().numpy(), X_true.detach().cpu().numpy()))
+        if nimp < OTLIM:
+            dists = ((lin_imp[M][:, None] - X_true[M]) ** 2).sum(2) / 2.
+            lin_rr_scores['OT'].append(ot.emd2(np.ones(nimp) / nimp,
+                                               np.ones(nimp) / nimp,
+                                               dists.cpu().numpy()))
+            logging.info(f"Linear RR imputation:\t"
+                         f"MAE: {lin_rr_scores['MAE'][-1]:.4f}\t"
+                         f"RMSE: {lin_rr_scores['RMSE'][-1]:.4f}\t"
+                         f"OT: {lin_rr_scores['OT'][-1]:.4f}\t"
+                         f"ED: {lin_rr_scores['ED'][-1]:.4f}")
+        else:
+            logging.info(f"Linear RR imputation:\t"
+                         f"MAE: {lin_rr_scores['MAE'][-1]:.4f}\t"
+                         f"RMSE: {lin_rr_scores['RMSE'][-1]:.4f}\t"
+                         f"ED: {lin_rr_scores['ED'][-1]:.4f}")
+
+        data["imp"]["lin_rr"].append(lin_imp[mask.bool()].detach().cpu().numpy())
+
+        logging.info("MLP Round Robin Imputation")
+
+        n_, d = X_true.shape
+        d_ = d - 1
+
+        models = {}
+
+        for i in range(d):
+            ## predict the ith variable using d-1 others
+            models[i] = nn.Sequential(nn.Linear(d_, 2 * d_),
+                                      nn.ReLU(),
+                                      nn.Linear(2 * d_, d_),
+                                      nn.ReLU(),
+                                      nn.Linear(d_, 1)
+                                      ).to(device)
+
+        mlp_rr_imputer = RRimputer(models,
+                                   max_iter=args.max_iter,
+                                   niter=args.rr_niter,
+                                   n_pairs=args.n_pairs,
+                                   batchsize=batchsize,
+                                   lr=args.lr,
+                                   weight_decay=args.decay,
+                                   order="random",
+                                   eps=epsilon,
+                                   opt=torch.optim.Adam,
+                                   scaling=args.scaling)
+
+        mlp_imp, _, _ = mlp_rr_imputer.fit_transform(X_nas.clone(), report_interval=1, verbose=True, X_true=X_true)
+        mlp_imp = mlp_imp.detach()
+
+        mlp_rr_scores['MAE'].append(MAE(mlp_imp, X_true, mask).item())
+        mlp_rr_scores['RMSE'].append(RMSE(mlp_imp, X_true, mask).item())
+        mlp_rr_scores['ED'].append(energy_distance(mlp_imp.detach().cpu().numpy(), X_true.detach().cpu().numpy()))
+        if nimp < OTLIM:
+            dists = ((mlp_imp[M][:, None] - X_true[M]) ** 2).sum(2) / 2.
+            mlp_rr_scores['OT'].append(ot.emd2(np.ones(nimp) / nimp,
+                                               np.ones(nimp) / nimp,
+                                               dists.cpu().numpy()))
+            logging.info(f"MLP RR imputation:\t"
+                         f"MAE: {mlp_rr_scores['MAE'][-1]:.4f}\t"
+                         f"RMSE: {mlp_rr_scores['RMSE'][-1]:.4f}\t"
+                         f"OT: {mlp_rr_scores['OT'][-1]:.4f}\t"
+                         f"ED: {mlp_rr_scores['ED'][-1]:.4f}")
+        else:
+            logging.info(f"MLP RR imputation:\t"
+                         f"MAE: {mlp_rr_scores['MAE'][-1]:.4f}\t"
+                         f"RMSE: {mlp_rr_scores['RMSE'][-1]:.4f}\t"
+                         f"ED: {mlp_rr_scores['ED'][-1]:.4f}")
+
+        data["imp"]["mlp_rr"].append(mlp_imp[mask.bool()].detach().cpu().numpy())
 
     scores = {}
     scores['psd'] = psd_scores
-    # scores['OT'] = ot_scores  # skipped for smoke test (OT method)
+    scores['OT'] = ot_scores
     scores['ice'] = ice_scores
     scores['mean'] = mean_scores
     scores['softimpute'] = softimpute_scores
-    # scores['lin_rr'] = lin_rr_scores  # skipped for smoke test (neural network based method)
-    # scores['mlp_rr'] = mlp_rr_scores  # skipped for smoke test (neural network based method)
+    scores['lin_rr'] = lin_rr_scores
+    scores['mlp_rr'] = mlp_rr_scores
 
     mean_sd = {}
     for method, method_scores in scores.items():
