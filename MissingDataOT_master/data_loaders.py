@@ -104,7 +104,7 @@ def dataset_loader(dataset):
 
 def fetch_parkinsons():
     if not os.path.isdir('datasets/parkinsons'):
-        os.mkdir('datasets/parkinsons')
+        os.makedirs('datasets/parkinsons')
         url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/parkinsons/parkinsons.data'
         wget.download(url, out='datasets/parkinsons/')
 
@@ -119,7 +119,7 @@ def fetch_parkinsons():
 
 def fetch_climate_model_crashes():
     if not os.path.isdir('datasets/climate_model_crashes'):
-        os.mkdir('datasets/climate_model_crashes')
+        os.makedirs('datasets/climate_model_crashes')
         url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/00252/pop_failures.dat'
         wget.download(url, out='datasets/climate_model_crashes/')
 
@@ -134,7 +134,7 @@ def fetch_climate_model_crashes():
 
 def fetch_concrete_compression():
     if not os.path.isdir('datasets/concrete_compression'):
-        os.mkdir('datasets/concrete_compression')
+        os.makedirs('datasets/concrete_compression')
         url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/concrete/compressive/Concrete_Data.xls'
         wget.download(url, out='datasets/concrete_compression/')
 
@@ -149,7 +149,7 @@ def fetch_concrete_compression():
 
 def fetch_yacht_hydrodynamics():
     if not os.path.isdir('datasets/yacht_hydrodynamics'):
-        os.mkdir('datasets/yacht_hydrodynamics')
+        os.makedirs('datasets/yacht_hydrodynamics')
         url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/00243/yacht_hydrodynamics.data'
         wget.download(url, out='datasets/yacht_hydrodynamics/')
 
@@ -163,7 +163,7 @@ def fetch_yacht_hydrodynamics():
 
 def fetch_airfoil_self_noise():
     if not os.path.isdir('datasets/airfoil_self_noise'):
-        os.mkdir('datasets/airfoil_self_noise')
+        os.makedirs('datasets/airfoil_self_noise')
         url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/00291/airfoil_self_noise.dat'
         wget.download(url, out='datasets/airfoil_self_noise/')
 
@@ -178,7 +178,7 @@ def fetch_airfoil_self_noise():
 
 def fetch_connectionist_bench_sonar():
     if not os.path.isdir('datasets/connectionist_bench_sonar'):
-        os.mkdir('datasets/connectionist_bench_sonar')
+        os.makedirs('datasets/connectionist_bench_sonar')
         url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/undocumented/connectionist-bench/sonar/sonar.all-data'
         wget.download(url, out='datasets/connectionist_bench_sonar/')
 
@@ -193,7 +193,7 @@ def fetch_connectionist_bench_sonar():
 
 def fetch_ionosphere():
     if not os.path.isdir('datasets/ionosphere'):
-        os.mkdir('datasets/ionosphere')
+        os.makedirs('datasets/ionosphere')
         url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/ionosphere/ionosphere.data'
         wget.download(url, out='datasets/ionosphere/')
 
@@ -208,7 +208,7 @@ def fetch_ionosphere():
 
 def fetch_qsar_biodegradation():
     if not os.path.isdir('datasets/qsar_biodegradation'):
-        os.mkdir('datasets/qsar_biodegradation')
+        os.makedirs('datasets/qsar_biodegradation')
         url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/00254/biodeg.csv'
         wget.download(url, out='datasets/qsar_biodegradation/')
 
@@ -223,7 +223,7 @@ def fetch_qsar_biodegradation():
 
 def fetch_seeds():
     if not os.path.isdir('datasets/seeds'):
-        os.mkdir('datasets/seeds')
+        os.makedirs('datasets/seeds')
         url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/00236/seeds_dataset.txt'
         wget.download(url, out='datasets/seeds/')
 
@@ -238,7 +238,7 @@ def fetch_seeds():
 
 def fetch_glass():
     if not os.path.isdir('datasets/glass'):
-        os.mkdir('datasets/glass')
+        os.makedirs('datasets/glass')
         url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/glass/glass.data'
         wget.download(url, out='datasets/glass/')
 
@@ -253,7 +253,7 @@ def fetch_glass():
 
 def fetch_ecoli():
     if not os.path.isdir('datasets/ecoli'):
-        os.mkdir('datasets/ecoli')
+        os.makedirs('datasets/ecoli')
         url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/ecoli/ecoli.data'
         wget.download(url, out='datasets/ecoli/')
 
@@ -267,7 +267,7 @@ def fetch_ecoli():
 
 def fetch_yeast():
     if not os.path.isdir('datasets/yeast'):
-        os.mkdir('datasets/yeast')
+        os.makedirs('datasets/yeast')
         url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/yeast/yeast.data'
         wget.download(url, out='datasets/yeast/')
 
@@ -282,7 +282,7 @@ def fetch_yeast():
 
 def fetch_libras():
     if not os.path.isdir('datasets/libras'):
-        os.mkdir('datasets/libras')
+        os.makedirs('datasets/libras')
         url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/libras/movement_libras.data'
         wget.download(url, out='datasets/libras/')
 
@@ -296,7 +296,7 @@ def fetch_libras():
 
 def fetch_planning_relax():
     if not os.path.isdir('datasets/planning_relax'):
-        os.mkdir('datasets/planning_relax')
+        os.makedirs('datasets/planning_relax')
         url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/00230/plrx.txt'
         wget.download(url, out='datasets/planning_relax/')
 
@@ -311,7 +311,7 @@ def fetch_planning_relax():
 
 def fetch_blood_transfusion():
     if not os.path.isdir('datasets/blood_transfusion'):
-        os.mkdir('datasets/blood_transfusion')
+        os.makedirs('datasets/blood_transfusion')
         url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/blood-transfusion/transfusion.data'
         wget.download(url, out='datasets/blood_transfusion/')
 
@@ -325,7 +325,7 @@ def fetch_blood_transfusion():
 
 def fetch_breast_cancer_diagnostic():
     if not os.path.isdir('datasets/breast_cancer_diagnostic'):
-        os.mkdir('datasets/breast_cancer_diagnostic')
+        os.makedirs('datasets/breast_cancer_diagnostic')
         url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/breast-cancer-wisconsin/wdbc.data'
         wget.download(url, out='datasets/breast_cancer_diagnostic/')
 
@@ -340,7 +340,7 @@ def fetch_breast_cancer_diagnostic():
 
 def fetch_connectionist_bench_vowel():
     if not os.path.isdir('datasets/connectionist_bench_vowel'):
-        os.mkdir('datasets/connectionist_bench_vowel')
+        os.makedirs('datasets/connectionist_bench_vowel')
         url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/undocumented/connectionist-bench/vowel/vowel-context.data'
         wget.download(url, out='datasets/connectionist_bench_vowel/')
 
@@ -355,7 +355,7 @@ def fetch_connectionist_bench_vowel():
 
 def fetch_concrete_slump():
     if not os.path.isdir('datasets/concrete_slump'):
-        os.mkdir('datasets/concrete_slump')
+        os.makedirs('datasets/concrete_slump')
         url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/concrete/slump/slump_test.data'
         wget.download(url, out='datasets/concrete_slump/')
 
@@ -370,7 +370,7 @@ def fetch_concrete_slump():
 
 def fetch_wine_quality_red():
     if not os.path.isdir('datasets/wine_quality_red'):
-        os.mkdir('datasets/wine_quality_red')
+        os.makedirs('datasets/wine_quality_red')
         url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/wine-quality/winequality-red.csv'
         wget.download(url, out='datasets/wine_quality_red/')
 
@@ -385,7 +385,7 @@ def fetch_wine_quality_red():
 
 def fetch_wine_quality_white():
     if not os.path.isdir('datasets/wine_quality_white'):
-        os.mkdir('datasets/wine_quality_white')
+        os.makedirs('datasets/wine_quality_white')
         url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/wine-quality/winequality-white.csv'
         wget.download(url, out='datasets/wine_quality_white/')
 
