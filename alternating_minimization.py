@@ -73,7 +73,7 @@ def alternating_minimization(info):
 
         trace_Q_star_H = np.einsum('kl,kl->', Q_star, H)
         assert np.isclose(trace_Q_star_H, 1), f"Tr(Q* H) = {trace_Q_star_H}, expected 1"
-        print("trace(Qˆ* H) in alteranating minimization ", trace_Q_star_H)
+        # print("trace(Qˆ* H) in alteranating minimization ", trace_Q_star_H)
         info['Q'] = Q_star
 
         history.append((
