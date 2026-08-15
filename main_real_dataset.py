@@ -39,6 +39,8 @@ import argparse
 import logging
 
 parser = argparse.ArgumentParser()
+
+# reproducibility / output
 parser.add_argument('--seed', type=int, default=42,
                     help='seed for reproducibility')
 parser.add_argument('--out_path', type=str, default=None,
@@ -47,6 +49,24 @@ parser.add_argument('--out_data', type=str, default=None,
                     help='filename for the data')
 parser.add_argument('--out_dir', type=str, default='exps',
                     help='directory name for results')
+parser.add_argument('--nexp', type=int, default=1,
+                    help='number of experiences per parameter setting')
+
+# dataset and how missingness is introduced into it
+parser.add_argument('--dataset', type=str, default="iris",
+                    help='dataset on which to run the experiments')
+parser.add_argument('--perc_test_set', type=float, default=0,
+                    help='percentage of dataset held out as a test set')
+parser.add_argument('--p', type=float, default=0.3, help='Proportion of imps')
+parser.add_argument('--MAR', action='store_true')
+parser.add_argument('--p_obs', type=float, default=0.3,
+                    help='Proportion of variables that are fully observed (MAR & MNAR model)')
+parser.add_argument('--MNAR_log', action='store_true')
+parser.add_argument('--MNAR_quant', action='store_true')
+parser.add_argument('--q_mnar', type=float, default=0.75,
+                    help='quantile that will have imps (MNAR quantiles model)')
+
+# Sinkhorn / round-robin imputation baselines
 parser.add_argument('--lr', type=float, default=1e-2, help='learning rate')
 parser.add_argument('--decay', type=float, default=1e-5,
                     help='weight decay (round robin)')
@@ -69,20 +89,8 @@ parser.add_argument('--quantile', type=float, default=.5,
                     help='distance quantile to select epsilon')
 parser.add_argument('-qm', '--quantile_multiplier', type=float, default=0.05,
                     help='distance quantile x multiplier =  epsilon')
-parser.add_argument('--nexp', type=int, default=1,
-                    help='number of experiences per parameter setting')
-parser.add_argument('--dataset', type=str, default="iris",
-                    help='dataset on which to run the experiments')
-parser.add_argument('--perc_test_set', type=float, default=0,
-                    help='percentage of dataset held out as a test set')
-parser.add_argument('--p', type=float, default=0.3, help='Proportion of imps')
-parser.add_argument('--MAR', action='store_true')
-parser.add_argument('--p_obs', type=float, default=0.3,
-                    help='Proportion of variables that are fully observed (MAR & MNAR model)')
-parser.add_argument('--MNAR_log', action='store_true')
-parser.add_argument('--MNAR_quant', action='store_true')
-parser.add_argument('--q_mnar', type=float, default=0.75,
-                    help='quantile that will have imps (MNAR quantiles model)')
+
+# logging
 parser.add_argument('--verbose', action='store_true')
 parser.add_argument('--report_interval', type=int, default=500)
 
@@ -224,7 +232,7 @@ if __name__ == "__main__":
             m=args.psd_m, eta_init=args.psd_eta, alpha=args.psd_alpha, lbd=psd_lbd,
             mu=psd_mu, l_rate_nodes=args.psd_lr_nodes, l_rate_param=args.psd_lr_param,
             nbr_bounce=args.psd_bounce, nbr_gradient_steps=args.psd_gradient_steps,
-            nbr_newton_step_Q=args.psd_newton_step_Q, seed=args.seed + n,
+            nbr_newton_step_Q=args.psd_newton_step_Q, seed=args.seed + n, verbose=args.verbose,
         )
 
         psd_runtime = time.perf_counter() - t_start

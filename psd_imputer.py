@@ -14,7 +14,7 @@ from sampling import mean as model_mean, check_normalized
 
 
 def fit_psd_model(dataset, masks, m, eta_init, alpha, lbd, mu, l_rate_nodes, l_rate_param,
-                   nbr_bounce, nbr_gradient_steps, nbr_newton_step_Q, seed=0):
+                   nbr_bounce, nbr_gradient_steps, nbr_newton_step_Q, seed=0, verbose=False):
     """
     :param dataset: (n, d) data; entries on the missing (masks == True) positions are never read
     :param masks: (n, d) boolean (or 0/1), True/1 = missing
@@ -38,6 +38,7 @@ def fit_psd_model(dataset, masks, m, eta_init, alpha, lbd, mu, l_rate_nodes, l_r
     :param nbr_newton_step_Q: maximum number of Newton iterations for each inner Q update
         (see optimization.newton_method)
     :param seed: seed fixing the randomness of the initial anchor_nodes/Q
+    :param verbose: if True, print progress (bounce/gradient-step/Newton-iteration counters)
     :return: (Q, anchor_nodes, precision, history), see alternating_minimization
     """
     n, d = dataset.shape
@@ -60,7 +61,7 @@ def fit_psd_model(dataset, masks, m, eta_init, alpha, lbd, mu, l_rate_nodes, l_r
         'Q': Q0, 'alpha': alpha, 'lbd': lbd, 'mu': mu,
         'l_rate_nodes': l_rate_nodes, 'l_rate_param': l_rate_param,
         'nbr_bounce': nbr_bounce, 'nbr_gradient_steps': nbr_gradient_steps,
-        'max_iter': nbr_newton_step_Q,
+        'max_iter': nbr_newton_step_Q, 'verbose': verbose,
     }
     Q, anchor_nodes, precision, history = alternating_minimization(info)
     check_normalized(anchor_nodes, precision, Q)
@@ -69,12 +70,12 @@ def fit_psd_model(dataset, masks, m, eta_init, alpha, lbd, mu, l_rate_nodes, l_r
 
 def psd_impute(X_nas, mask, m=50, eta_init=2.0, alpha=1e-6, lbd=1e-4, mu=1e-4,
                l_rate_nodes=1e-1, l_rate_param=1e-2, nbr_bounce=30, nbr_gradient_steps=5,
-               nbr_newton_step_Q=100, seed=0):
+               nbr_newton_step_Q=100, seed=0, verbose=False):
     """
     :param X_nas: (n, d) data, NaN on the missing entries
     :param mask: (n, d) boolean (or 0/1), True/1 = missing
     :param m, eta_init, alpha, lbd, mu, l_rate_nodes, l_rate_param, nbr_bounce,
-        nbr_gradient_steps, nbr_newton_step_Q, seed: see fit_psd_model
+        nbr_gradient_steps, nbr_newton_step_Q, seed, verbose: see fit_psd_model
     :return: (X_imputed, history) -- X_imputed is (n, d) with the missing entries filled in,
         observed entries left untouched
     """
@@ -86,6 +87,7 @@ def psd_impute(X_nas, mask, m=50, eta_init=2.0, alpha=1e-6, lbd=1e-4, mu=1e-4,
     Q, W, eta, history = fit_psd_model(
         dataset, mask.astype(float), m, eta_init, alpha, lbd, mu,
         l_rate_nodes, l_rate_param, nbr_bounce, nbr_gradient_steps, nbr_newton_step_Q, seed=seed,
+        verbose=verbose,
     )
 
     X_imputed = dataset.copy()
