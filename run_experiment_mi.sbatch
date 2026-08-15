@@ -9,7 +9,7 @@
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
 #SBATCH --time=12:00:00
-#SBATCH --output=%x_%A_%a.out
+#SBATCH --output=logs/%x_%A_%a.out
 
 source /home/$USER/.bashrc
 conda activate psd_general
@@ -59,7 +59,7 @@ datasets1=(
 
 dataset=${datasets1[$SLURM_ARRAY_TASK_ID]}
 echo "current dataset: ${dataset}"
-exec > "${SLURM_JOB_NAME}_${dataset}_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.out" 2>&1
+exec > "logs/${SLURM_JOB_NAME}_${dataset}_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.out" 2>&1
 
 python3 -u main_real_dataset.py \
     --dataset=${dataset} \
