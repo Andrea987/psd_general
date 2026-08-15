@@ -4,7 +4,7 @@
 #
 
 #SBATCH --job-name=missing_real_data
-#SBATCH --array=0-19
+#SBATCH --array=0-2
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
@@ -54,12 +54,13 @@ datasets=(
 )
 
 datasets1=(
-    "iris"
-    "wine"
+     "airfoil_self_noise"
+     "yeast"
+     "blood_transfusion"   
 )
 
-dataset=${datasets[$SLURM_ARRAY_TASK_ID]}
-echo "current dataset: ${dataset}"
+dataset=${datasets1[$SLURM_ARRAY_TASK_ID]}
+echo "current dataset: ${dataset1}"
 
 python3 -u main_real_dataset.py \
     --dataset=${dataset} \
@@ -67,7 +68,7 @@ python3 -u main_real_dataset.py \
     --nexp=10 \
     --perc_test_set=0.3 \
     --sinkhorn_niter=3000 \
-    --psd_m=80 \
+    --psd_m=60 \
     --psd_eta=1.5 \
     --psd_alpha=1e-6 \
     --psd_lbd=1e-1 \

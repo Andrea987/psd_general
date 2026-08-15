@@ -16,8 +16,6 @@ import copy
 import time
 import resource
 
-from scipy.spatial.distance import cdist
-
 from sklearn.preprocessing import scale
 from sklearn.experimental import enable_iterative_imputer
 from sklearn.impute import IterativeImputer
@@ -34,6 +32,7 @@ from MissingDataOT_master.data_loaders import dataset_loader
 from MissingDataOT_master.imputers import OTimputer, RRimputer
 
 from psd_imputer import psd_impute
+from psd import energy_distance
 
 import argparse
 import logging
@@ -142,12 +141,6 @@ def peak_rss_mb():
     return maxrss / (1024 ** 2) if sys.platform == 'darwin' else maxrss / 1024
 
 
-def energy_distance(X, Y):
-    """Energy distance (Szekely & Rizzo) between two point clouds."""
-    dist_XY = cdist(X, Y)
-    dist_XX = cdist(X, X)
-    dist_YY = cdist(Y, Y)
-    return 2 * dist_XY.mean() - dist_XX.mean() - dist_YY.mean()
 
 if __name__ == "__main__":
 

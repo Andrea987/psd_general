@@ -2,6 +2,8 @@ import numpy as np
 from sklearn.datasets import make_moons
 
 from plot_toy_2d import run_and_collect_steps, plot_steps, plot_initial_vs_final_model
+from psd import energy_distance
+from sampling import sample_bisection
 
 
 def generate_toy_info(n=400, m=30, seed=0):
@@ -36,3 +38,21 @@ if __name__ == '__main__':
     snapshots = run_and_collect_steps(info, num_steps=30)
     plot_steps(info, snapshots, save_path='toy_test_1_steps.png')
     plot_initial_vs_final_model(info, snapshots, save_path='toy_test_1_final_model.png')
+
+    # Sanity check: does energy_distance actually discriminate a good fit from a bad one?
+    X = info['dataset']
+    n = X.shape[0]
+    final = snapshots[-1]
+    model_samples = sample_bisection(final['anchor_nodes'], final['precision'], final['Q'], N=n)
+
+    rng = np.random.default_rng(1)
+    fresh_moons, _ = make_moons(n_samples=n, noise=0.1, random_state=1)
+    low, high = X.min(axis=0), X.max(axis=0)
+    uniform_noise = rng.uniform(low, high, size=X.shape)
+
+    print(f"energy_distance(X, model samples):  {energy_distance(X, model_samples):.4f}  "
+          f"(learned model vs. original data -- should be small if the fit is good)")
+    print(f"energy_distance(X, fresh moons):     {energy_distance(X, fresh_moons):.4f}  "
+          f"(two i.i.d. draws from the true distribution -- noise floor)")
+    print(f"energy_distance(X, uniform noise):   {energy_distance(X, uniform_noise):.4f}  "
+          f"(clearly different distribution -- should be clearly larger)")

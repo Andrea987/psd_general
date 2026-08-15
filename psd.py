@@ -14,6 +14,19 @@ def Distance_Matrix_Vector_Matrices(x, y, eta):  # distance matrices with vector
     return distances
 
 
+def energy_distance(X, Y):
+    """
+    Energy distance (Szekely & Rizzo) between two point clouds.
+    :param X: (n, d) points
+    :param Y: (m, d) points
+    :return: scalar, 2 * mean(dist(X, Y)) - mean(dist(X, X)) - mean(dist(Y, Y))
+    """
+    dist_XY = distance_matrix(X, Y)
+    dist_XX = distance_matrix(X, X)
+    dist_YY = distance_matrix(Y, Y)
+    return 2 * dist_XY.mean() - dist_XX.mean() - dist_YY.mean()
+
+
 def K_S(info):
     """
     info: dict with keys
