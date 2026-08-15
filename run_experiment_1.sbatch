@@ -63,7 +63,7 @@ echo "current dataset: ${dataset}"
 
 python3 -u main_real_dataset.py \
     --dataset=${dataset} \
-    --p=0.4 \
+    --p=0.2 \
     --nexp=2 \
     --perc_test_set=0.2 \
     --sinkhorn_niter=3000 \
