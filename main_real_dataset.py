@@ -74,8 +74,8 @@ parser.add_argument('--scaling', type=float, default=.9,
                     help='sinkhorn scaling parameter (speed/precision tradeoff)')
 parser.add_argument('-b', '--batchsize', type=int, default=128,
                     help='batchsize(s) for the experiments')
-parser.add_argument('--niter', type=int, default=3000,
-                    help='number of GD iterations')
+parser.add_argument('--sinkhorn_niter', type=int, default=3000,
+                    help='number of GD iterations (Sinkhorn imputation)')
 parser.add_argument('--max_iter', type=int, default=15,
                     help='maximum number of cycles (round robin)')
 parser.add_argument('--rr_niter', type=int, default=15,
@@ -414,7 +414,7 @@ if __name__ == "__main__":
         # Skipped for smoke test (OT method)
         # logging.info("Sinkhorn Imputation")
         #
-        # sk_imputer = OTimputer(eps=epsilon, niter=args.niter, batchsize=batchsize, lr=args.lr)
+        # sk_imputer = OTimputer(eps=epsilon, niter=args.sinkhorn_niter, batchsize=batchsize, lr=args.lr)
         #
         # sk_imp, _, _ = sk_imputer.fit_transform(X_nas.clone(), report_interval=args.report_interval,
         #                              verbose=True, X_true=X_true)

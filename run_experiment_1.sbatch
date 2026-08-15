@@ -17,7 +17,7 @@ conda activate psd_general
 # main_real_dataset.py parameters:
 #   --p                    probability of missing components
 #   --nexp                 number of experiments
-#   --niter                number of Sinkhorn iterations
+#   --sinkhorn_niter       number of Sinkhorn iterations
 #   --psd_m                number of anchor nodes
 #   --psd_eta              initial precision of the Gaussians
 #   --psd_alpha            parameter inside the log of the loss, log(Tr(Q.) + alpha)
@@ -64,7 +64,7 @@ python3 -u main_real_dataset.py \
     --dataset=${dataset} \
     --p=0.4 \
     --nexp=2 \
-    --niter=30 \
+    --sinkhorn_niter=30 \
     --psd_m=65 \
     --psd_eta=1.6 \
     --psd_alpha=1e-6 \
