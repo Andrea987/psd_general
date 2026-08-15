@@ -8,7 +8,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
-#SBATCH --time=12:00:00
+#SBATCH --time=24:00:00
 #SBATCH --output=logs/%x_%A_%a.out
 
 source /home/$USER/.bashrc
@@ -64,7 +64,7 @@ echo "current dataset: ${dataset}"
 python3 -u main_real_dataset.py \
     --dataset=${dataset} \
     --p=0.2 \
-    --nexp=2 \
+    --nexp=10 \
     --perc_test_set=0.2 \
     --sinkhorn_niter=3000 \
     --psd_m=80 \
@@ -74,7 +74,7 @@ python3 -u main_real_dataset.py \
     --psd_mu=1e-4 \
     --psd_lr_nodes=1e-3 \
     --psd_lr_param=1e-4 \
-    --psd_bounce=60 \
+    --psd_bounce=50 \
     --psd_gradient_steps=5 \
     --psd_newton_step_Q=50
 
