@@ -59,7 +59,6 @@ datasets1=(
 
 dataset=${datasets1[$SLURM_ARRAY_TASK_ID]}
 echo "current dataset: ${dataset}"
-exec > "logs/${SLURM_JOB_NAME}_${dataset}_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.out" 2>&1
 
 python3 -u main_real_dataset.py \
     --dataset=${dataset} \
