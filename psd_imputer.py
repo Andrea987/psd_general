@@ -10,7 +10,7 @@ from sklearn.impute import SimpleImputer
 
 from alternating_minimization import alternating_minimization
 from marginalize_condition import condition
-from sampling import mean as model_mean, check_normalized
+from sampling import mean as model_mean, sample_bisection, check_normalized
 
 
 def fit_psd_model(dataset, masks, m, eta_init, alpha, lbd, mu, l_rate_nodes, l_rate_param,
@@ -68,20 +68,66 @@ def fit_psd_model(dataset, masks, m, eta_init, alpha, lbd, mu, l_rate_nodes, l_r
     return Q, anchor_nodes, precision, history
 
 
+def impute_mean(dataset, mask, Q, anchor_nodes, precision):
+    """
+    Fill each row's missing entries with the mean of its conditional distribution (see
+    marginalize_condition.condition and sampling.mean).
+
+    :param dataset: (n, d) data; entries on the missing (mask == True) positions are never read
+    :param mask: (n, d) boolean, True = missing
+    :param Q, anchor_nodes, precision: a fitted (see fit_psd_model), normalized PSD model
+    :return: (n, d) copy of dataset with the missing entries filled in
+    """
+    n = dataset.shape[0]
+    X_imputed = dataset.copy()
+    for i in range(n):
+        row_mask = mask[i]
+        if not row_mask.any():
+            continue
+        W_ns, eta_ns, Q_cond = condition(anchor_nodes, precision, Q, row_mask, dataset[i])
+        X_imputed[i, row_mask] = model_mean(W_ns, eta_ns, Q_cond)
+    return X_imputed
+
+
+def impute_multiple(dataset, mask, Q, anchor_nodes, precision, n_imputations):
+    """
+    Draw n_imputations independent completions of the missing entries, by sampling (rather than
+    taking the mean of) each row's conditional distribution (see marginalize_condition.condition
+    and sampling.sample_bisection).
+
+    :param dataset, mask, Q, anchor_nodes, precision: see impute_mean
+    :param n_imputations: number of independent completions to draw
+    :return: (n_imputations, n, d) array; observed entries identical across imputations, missing
+        entries independently sampled each time
+    """
+    n = dataset.shape[0]
+    imputations = np.repeat(dataset[np.newaxis], n_imputations, axis=0)
+    for i in range(n):
+        row_mask = mask[i]
+        if not row_mask.any():
+            continue
+        W_ns, eta_ns, Q_cond = condition(anchor_nodes, precision, Q, row_mask, dataset[i])
+        imputations[:, i, row_mask] = sample_bisection(W_ns, eta_ns, Q_cond, N=n_imputations)
+    return imputations
+
+
 def psd_impute(X_nas, mask, m=50, eta_init=2.0, alpha=1e-6, lbd=1e-4, mu=1e-4,
                l_rate_nodes=1e-1, l_rate_param=1e-2, nbr_bounce=30, nbr_gradient_steps=5,
-               nbr_newton_step_Q=100, seed=0, verbose=False):
+               nbr_newton_step_Q=100, seed=0, verbose=False, n_imputations=0):
     """
     :param X_nas: (n, d) data, NaN on the missing entries
     :param mask: (n, d) boolean (or 0/1), True/1 = missing
     :param m, eta_init, alpha, lbd, mu, l_rate_nodes, l_rate_param, nbr_bounce,
         nbr_gradient_steps, nbr_newton_step_Q, seed, verbose: see fit_psd_model
-    :return: (X_imputed, history) -- X_imputed is (n, d) with the missing entries filled in,
-        observed entries left untouched
+    :param n_imputations: if > 0, also draw this many independent completions per row by sampling
+        (rather than taking the mean of) each row's conditional distribution, reusing the same fit
+        (see impute_multiple)
+    :return: (X_imputed, history, multiple_imp) -- X_imputed is (n, d) with the missing entries
+        mean-filled, observed entries left untouched; multiple_imp is (n_imputations, n, d) if
+        n_imputations > 0, else None
     """
     X_nas = np.asarray(X_nas, dtype=float)
     mask = np.asarray(mask, dtype=bool)
-    n, d = X_nas.shape
 
     dataset = np.where(mask, 0.0, X_nas)  # dummy value on missing entries, ignored by K_S/H_NS
     Q, W, eta, history = fit_psd_model(
@@ -90,13 +136,8 @@ def psd_impute(X_nas, mask, m=50, eta_init=2.0, alpha=1e-6, lbd=1e-4, mu=1e-4,
         verbose=verbose,
     )
 
-    X_imputed = dataset.copy()
-    for i in range(n):
-        row_mask = mask[i]
-        if not row_mask.any():
-            continue
-        W_ns, eta_ns, Q_cond = condition(W, eta, Q, row_mask, dataset[i])
-        X_imputed[i, row_mask] = model_mean(W_ns, eta_ns, Q_cond)
+    X_imputed = impute_mean(dataset, mask, Q, W, eta)
+    multiple_imp = impute_multiple(dataset, mask, Q, W, eta, n_imputations) if n_imputations > 0 else None
 
-    return X_imputed, history
+    return X_imputed, history, multiple_imp
 

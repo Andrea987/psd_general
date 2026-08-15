@@ -115,6 +115,9 @@ parser.add_argument('--psd_gradient_steps', type=int, default=5,
                     help='number of gradient steps to optimize anchor nodes and precision, per bounce')
 parser.add_argument('--psd_newton_step_Q', type=int, default=50,
                     help='maximum number of Newton iterations for each inner Q update')
+parser.add_argument('--psd_n_imputations', type=int, default=10,
+                    help='number of independent completions drawn for the multiple-imputation '
+                         'OT/ED-vs-test-set metric (0 to disable)')
 
 args = parser.parse_args()
 
@@ -171,6 +174,8 @@ if __name__ == "__main__":
         for metric in ['MAE', 'RMSE', 'OT', 'OT_test', 'ED', 'runtime', 'memory']:
             dic[metric] = []
     psd_scores['avg_bounce_time'] = []
+    psd_scores['MI_OT'] = []
+    psd_scores['MI_ED'] = []
 
     p = args.p
 
@@ -227,12 +232,13 @@ if __name__ == "__main__":
         t_start = time.perf_counter()
         mem_start = peak_rss_mb()
 
-        psd_imp_np, psd_history = psd_impute(
+        psd_imp_np, psd_history, psd_multiple_imp = psd_impute(
             data_nas, mask.cpu().numpy(),
             m=args.psd_m, eta_init=args.psd_eta, alpha=args.psd_alpha, lbd=psd_lbd,
             mu=psd_mu, l_rate_nodes=args.psd_lr_nodes, l_rate_param=args.psd_lr_param,
             nbr_bounce=args.psd_bounce, nbr_gradient_steps=args.psd_gradient_steps,
             nbr_newton_step_Q=args.psd_newton_step_Q, seed=args.seed + n, verbose=args.verbose,
+            n_imputations=args.psd_n_imputations if n_test > 0 else 0,
         )
 
         psd_runtime = time.perf_counter() - t_start
@@ -273,6 +279,26 @@ if __name__ == "__main__":
                          f'Time: {psd_runtime:.4f}s\t'
                          f'Time/bounce: {psd_scores["avg_bounce_time"][-1]:.4f}s\t'
                          f'Mem: {psd_scores["memory"][-1]:.2f}MB')
+
+        if psd_multiple_imp is not None:
+            # stack the n_imputations independent completions into one (n_imputations * n_train, d)
+            # point cloud and compare it against the held-out test set
+            stacked_imp = psd_multiple_imp.reshape(-1, ground_truth.shape[1])
+            n_stacked = stacked_imp.shape[0]
+
+            psd_scores['MI_ED'].append(energy_distance(stacked_imp, test_set))
+            if n_stacked < OTLIM:
+                stacked_imp_t = torch.tensor(stacked_imp)
+                dists_mi = ((stacked_imp_t[:, None, :] - X_true_test) ** 2).sum(2) / 2.
+                psd_scores['MI_OT'].append(ot.emd2(np.ones(n_stacked) / n_stacked,
+                                                    np.ones(n_test) / n_test,
+                                                    dists_mi.cpu().numpy()))
+                logging.info(f'psd multiple imputation:\t '
+                             f'MI_OT: {psd_scores["MI_OT"][-1]:.4f}\t'
+                             f'MI_ED: {psd_scores["MI_ED"][-1]:.4f}')
+            else:
+                logging.info(f'psd multiple imputation:\t '
+                             f'MI_ED: {psd_scores["MI_ED"][-1]:.4f}')
 
         t_start = time.perf_counter()
         mem_start = peak_rss_mb()
