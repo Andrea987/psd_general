@@ -4,7 +4,7 @@
 #
 
 #SBATCH --job-name=missing_real_data
-#SBATCH --array=0-1
+#SBATCH --array=0-19
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
@@ -58,7 +58,7 @@ datasets1=(
     "wine"
 )
 
-dataset=${datasets1[$SLURM_ARRAY_TASK_ID]}
+dataset=${datasets[$SLURM_ARRAY_TASK_ID]}
 echo "current dataset: ${dataset}"
 
 python3 -u main_real_dataset.py \
