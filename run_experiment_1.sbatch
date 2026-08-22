@@ -68,11 +68,11 @@ python3 -u main_real_dataset.py \
     --nexp=5 \
     --perc_test_set=0.3 \
     --sinkhorn_niter=3000 \
-    --psd_m=65 \
+    --psd_m=85 \
     --psd_eta=1.5 \
     --psd_alpha=1e-6 \
     --psd_lbd=1e-1 \
-    --psd_mu=1e-3 \
+    --psd_mu=1e-4 \
     --psd_lr_nodes=1e-3 \
     --psd_lr_param=1e-4 \
     --psd_bounce=100 \
