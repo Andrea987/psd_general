@@ -26,6 +26,8 @@ conda activate psd_general
 #   --sinkhorn_niter          number of Sinkhorn iterations
 #   --psd_m                   number of anchor nodes
 #   --psd_eta                 initial LOG-precision of the Gaussians (actual starting precision = exp(this))
+#   --psd_eta_init_mode       fixed: every dimension starts at --psd_eta. empirical: every
+#                             dimension starts at 1 / empirical_variance instead, ignoring --psd_eta
 #   --psd_alpha               parameter inside the log of the loss, log(Tr(Q.) + alpha)
 #   --psd_lbd                 hyperparameter of the trace regularizer
 #   --psd_mu                  hyperparameter of the logdet regularizer
@@ -78,6 +80,7 @@ python3 -u main_real_dataset.py \
     --sinkhorn_niter=3000 \
     --psd_m=85 \
     --psd_eta=1.6 \
+    --psd_eta_init_mode=empirical \
     --psd_alpha=1e-6 \
     --psd_lbd=1e-1 \
     --psd_mu=1e-4 \
