@@ -65,17 +65,17 @@ echo "current dataset: ${dataset1}"
 python3 -u main_real_dataset.py \
     --dataset=${dataset} \
     --p=0.2 \
-    --nexp=10 \
+    --nexp=5 \
     --perc_test_set=0.3 \
     --sinkhorn_niter=3000 \
-    --psd_m=60 \
+    --psd_m=65 \
     --psd_eta=1.5 \
     --psd_alpha=1e-6 \
     --psd_lbd=1e-1 \
     --psd_mu=1e-3 \
     --psd_lr_nodes=1e-3 \
     --psd_lr_param=1e-4 \
-    --psd_bounce=50 \
+    --psd_bounce=100 \
     --psd_gradient_steps=5 \
     --psd_newton_step_Q=10 \
     --verbose

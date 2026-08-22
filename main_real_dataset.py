@@ -150,6 +150,14 @@ if __name__ == "__main__":
 
     dataset_loaded = scale(dataset_loader(dataset))
 
+    MAX_OBS = 1000
+    if dataset_loaded.shape[0] > MAX_OBS:
+        subsample_rng = np.random.default_rng(args.seed)
+        idx = subsample_rng.choice(dataset_loaded.shape[0], size=MAX_OBS, replace=False)
+        dataset_loaded = dataset_loaded[idx]
+        logging.info(f"dataset {dataset} has more than {MAX_OBS} observations, "
+                     f"subsampled down to {MAX_OBS} (train + test combined)")
+
     METHODS = ["psd", "OT", "ice", "mean", "softimpute", "lin_rr", "mlp_rr"]
 
     psd_scores = {}
