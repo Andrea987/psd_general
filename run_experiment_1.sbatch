@@ -73,7 +73,7 @@ python3 -u main_real_dataset.py \
     --p=0.2 \
     --nexp=5 \
     --perc_test_set=0.3 \
-    --large_dataset_threshold=1000 \
+    --large_dataset_threshold=400 \
     --max_train_obs=400 \
     --sinkhorn_niter=3000 \
     --psd_m=85 \
