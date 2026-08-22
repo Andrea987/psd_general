@@ -7,14 +7,39 @@ marginalized out / conditioned away (missing, NS), False on the dimensions kept/
 """
 
 import numpy as np
-from psd import K_S, H_NS, C_2eta_NS
+from psd import H_NS, C_2eta_NS
+
+
+def _stable_K_S(anchor_nodes, precision, mask, x):
+    """
+    Numerically stable version of psd.K_S: phi_S(x)_k = exp(-sum_{d in S} eta_d (x_d - w_k,d)^2)
+    is rescaled per point by subtracting each row's max exponent before exponentiating (i.e.
+    phi_S is divided by its largest entry), so the closest anchor node's phi_S is exactly 1
+    instead of every entry underflowing to 0 when precision is large and x is far (in the
+    precision-weighted sense) from every anchor node.
+
+    This is only safe because condition() only ever uses the *ratio* base / eval_value (both
+    built from this same rescaled K_S), which is invariant to the per-point rescaling -- unlike
+    psd.K_S, which feeds directly into the loss/gradient/Newton machinery and must NOT be
+    rescaled there. Do not reuse this function outside marginalize_condition.py.
+
+    :return: (n, m, m) stack of Q-independent, rescaled K_S(x)_i, one per point
+    """
+    observed = ~mask  # (n, d)
+    eta_S = precision[None, :] * observed  # (n, d)
+    diff2 = (x[:, None, :] - anchor_nodes[None, :, :]) ** 2  # (n, m, d)
+    log_phi_S = -np.sum(eta_S[:, None, :] * diff2, axis=-1)  # (n, m)
+    log_phi_S = log_phi_S - log_phi_S.max(axis=1, keepdims=True)  # per-point rescaling
+    phi_S = np.exp(log_phi_S)  # (n, m), max entry per row is exactly 1
+    return np.einsum('ki,kj->kij', phi_S, phi_S)  # (n, m, m)
 
 
 def partial_evaluation(anchor_nodes, precision, Q, mask, x):
     """
     Partially evaluate the model at x_S, without integrating the NS dimensions out yet.
     This is the "base matrix" that both marginalize and condition build on: Q o K_S(x),
-    with o the Hadamard product.
+    with o the Hadamard product (K_S rescaled for numerical stability -- see _stable_K_S; safe
+    here because condition() only ever uses the ratio base / eval_value, invariant to rescaling).
 
     :param anchor_nodes: (m, d) anchor/inducing points
     :param precision: (d,) per-dimension precision of the Gaussian kernel
@@ -25,9 +50,7 @@ def partial_evaluation(anchor_nodes, precision, Q, mask, x):
     :return: (n, m, m) stack of Q o K_S(x)_i, one per point
     """
     x = np.atleast_2d(x)
-    masks = np.broadcast_to(mask, x.shape)
-    info = {'dataset': x, 'anchor_nodes': anchor_nodes, 'precision': precision, 'masks': masks}
-    return Q * K_S(info)  # (n, m, m), Hadamard product broadcasting Q over the n points
+    return Q * _stable_K_S(anchor_nodes, precision, mask, x)  # (n, m, m)
 
 
 def marginalize(anchor_nodes, precision, Q, mask, x):
