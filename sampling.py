@@ -128,14 +128,27 @@ def sample_bisection(W, gamma, Q, N, tol=1e-3):
     x0 = mean(W, gamma, Q).reshape(1, d)
     qq = math.log(normalization_constant(W, gamma, Q))
 
+    # Q is only PSD as a whole matrix -- individual entries (hence _pairwise_weight's weight) can
+    # be negative, so v = sum(G * weight) for a still-too-small window can land slightly negative
+    # due to floating-point cancellation even though the true integral is non-negative. Treat
+    # v <= 0 as "not enough mass captured yet" rather than crashing on math.log(v); cap the number
+    # of expansions so a genuinely degenerate (W, gamma, Q) fails loudly instead of looping forever.
     c = 1.0
-    while True:
+    max_expansions = 300
+    for _ in range(max_expansions):
         c *= 10
         a = x0 - c
         b = x0 + c
         v = float(integrate_hypercube(W, gamma, Q, a, b)[0])
-        if math.log(v) - qq >= math.log(1.0 - tol):
+        if v > 0 and math.log(v) - qq >= math.log(1.0 - tol):
             break
+    else:
+        raise RuntimeError(
+            f"sample_bisection: failed to find a window capturing enough mass after "
+            f"{max_expansions} expansions (c={c:.3g}, last v={v:.3g}). Likely floating-point "
+            "underflow/cancellation in the pairwise anchor kernel (_pairwise_weight) for this "
+            "(W, gamma, Q)."
+        )
 
     steps = math.ceil(d * (math.log(2 * c / tol) / math.log(2)))
 
