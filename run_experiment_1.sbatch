@@ -25,6 +25,9 @@ conda activate psd_general
 #   --max_train_obs           training-set size used for datasets over --large_dataset_threshold
 #   --sinkhorn_niter          number of Sinkhorn iterations
 #   --psd_m                   number of anchor nodes
+#   --psd_anchor_init         data_subset: anchor nodes are a random subset of the mean-imputed
+#                             data. uniform_hypercube: anchor nodes are sampled i.i.d. uniformly
+#                             in the bounding box of the (mean-imputed) data instead
 #   --psd_eta                 initial LOG-precision of the Gaussians (actual starting precision = exp(this))
 #   --psd_eta_init_mode       fixed: every dimension starts at --psd_eta. empirical: every
 #                             dimension starts at 1 / empirical_variance instead, ignoring --psd_eta
@@ -75,10 +78,11 @@ python3 -u main_real_dataset.py \
     --p=0.2 \
     --nexp=5 \
     --perc_test_set=0.3 \
-    --large_dataset_threshold=300 \
-    --max_train_obs=300 \
+    --large_dataset_threshold=1000 \
+    --max_train_obs=700 \
     --sinkhorn_niter=3000 \
-    --psd_m=85 \
+    --psd_m=200 \
+    --psd_anchor_init=uniform_hypercube \
     --psd_eta=1.6 \
     --psd_eta_init_mode=empirical \
     --psd_alpha=1e-6 \
