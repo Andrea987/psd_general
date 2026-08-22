@@ -1,6 +1,6 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
 
-numpy
+numpy<2
 scipy
 pandas
 scikit-learn
@@ -9,3 +9,4 @@ torch
 geomloss
 POT
 wget
+jax
