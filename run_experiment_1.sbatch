@@ -75,8 +75,8 @@ python3 -u main_real_dataset.py \
     --p=0.2 \
     --nexp=5 \
     --perc_test_set=0.3 \
-    --large_dataset_threshold=400 \
-    --max_train_obs=400 \
+    --large_dataset_threshold=300 \
+    --max_train_obs=300 \
     --sinkhorn_niter=3000 \
     --psd_m=85 \
     --psd_eta=1.6 \
@@ -84,11 +84,11 @@ python3 -u main_real_dataset.py \
     --psd_alpha=1e-6 \
     --psd_lbd=1e-1 \
     --psd_mu=1e-4 \
-    --psd_lr_nodes=1e-4 \
+    --psd_lr_nodes=1e-3 \
     --psd_lr_param=1e-4 \
     --psd_bounce=100 \
-    --psd_gradient_steps=5 \
-    --psd_newton_step_Q=5 \
+    --psd_gradient_steps=3 \
+    --psd_newton_step_Q=3 \
     --verbose
 
 
