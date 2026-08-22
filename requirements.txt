@@ -10,3 +10,4 @@ geomloss
 POT
 wget
 jax
+xlrd>=2.0.1

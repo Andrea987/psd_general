@@ -150,13 +150,11 @@ if __name__ == "__main__":
 
     dataset_loaded = scale(dataset_loader(dataset))
 
-    MAX_OBS = 1000
-    if dataset_loaded.shape[0] > MAX_OBS:
-        subsample_rng = np.random.default_rng(args.seed)
-        idx = subsample_rng.choice(dataset_loaded.shape[0], size=MAX_OBS, replace=False)
-        dataset_loaded = dataset_loaded[idx]
-        logging.info(f"dataset {dataset} has more than {MAX_OBS} observations, "
-                     f"subsampled down to {MAX_OBS} (train + test combined)")
+    LARGE_DATASET_THRESHOLD = 1000
+    TRAIN_SIZE_FOR_LARGE_DATASETS = 500
+    if dataset_loaded.shape[0] > LARGE_DATASET_THRESHOLD:
+        logging.info(f"dataset {dataset} has more than {LARGE_DATASET_THRESHOLD} observations, "
+                     f"using {TRAIN_SIZE_FOR_LARGE_DATASETS} for training and the rest as test set")
 
     METHODS = ["psd", "OT", "ice", "mean", "softimpute", "lin_rr", "mlp_rr"]
 
@@ -189,7 +187,11 @@ if __name__ == "__main__":
 
     for n in range(args.nexp):
 
-        if args.perc_test_set > 0:
+        if dataset_loaded.shape[0] > LARGE_DATASET_THRESHOLD:
+            idx = np.random.default_rng(args.seed + n).permutation(dataset_loaded.shape[0])
+            ground_truth = dataset_loaded[idx[:TRAIN_SIZE_FOR_LARGE_DATASETS]]
+            test_set = dataset_loaded[idx[TRAIN_SIZE_FOR_LARGE_DATASETS:]]
+        elif args.perc_test_set > 0:
             ground_truth, test_set = train_test_split(dataset_loaded, test_size=args.perc_test_set)
         else:
             ground_truth = dataset_loaded
@@ -200,13 +202,14 @@ if __name__ == "__main__":
         n_test = test_set.shape[0]
         n_total = n_train + n_test
         n_features = ground_truth.shape[1]
+        test_split = n_test / n_total if n_total > 0 else 0.0
 
         logging.info(f"dataset: {dataset}\t"
                      f"features: {n_features}\t"
                      f"total obs: {n_total}\t"
                      f"train obs: {n_train}\t"
                      f"test obs: {n_test}\t"
-                     f"test split: {args.perc_test_set:.2%}\t"
+                     f"test split: {test_split:.2%}\t"
                      f"train missingness (p): {p:.2%}")
 
         ### Each entry from the second axis has a probability p of being NA
