@@ -2,7 +2,8 @@ import numpy as np
 import ot
 from sklearn.datasets import make_moons
 
-from plot_toy_2d import run_and_collect_steps, plot_steps, plot_initial_vs_final_model
+from alternating_minimization import alternating_minimization
+from plot_toy_2d import plot_initial_vs_final_model
 from psd import energy_distance
 from sampling import sample_bisection
 from psd_imputer import impute_multiple
@@ -31,21 +32,23 @@ def generate_toy_info(n=400, m=30, seed=0):
     return {
         'dataset': X, 'masks': mask, 'anchor_nodes': W, 'precision': eta, 'Q': Q0,
         'alpha': 1e-6, 'lbd': 0.0001, 'mu': 0.0001,
-        'l_rate_nodes': 1e-1, 'l_rate_param': 1e-2, 'nbr_bounce': 1, 'nbr_gradient_steps': 5,
+        'l_rate_nodes': 1e-1, 'l_rate_param': 1e-4, 'nbr_bounce': 1, 'nbr_gradient_steps': 5,
+        'verbose': True,
     }
 
 
 if __name__ == '__main__':
     info = generate_toy_info()
-    snapshots = run_and_collect_steps(info, num_steps=150)
-    plot_steps(info, snapshots, save_path='toy_test_1_steps.png')
-    plot_initial_vs_final_model(info, snapshots, save_path='toy_test_1_final_model.png')
+    info = dict(info)
+    info['nbr_bounce'] = 150
+    Q, W, eta, history = alternating_minimization(info)
+    final_loss, final_lagrangian = history[-1]
+    plot_initial_vs_final_model(info, Q, W, eta, final_loss, save_path='toy_test_1_final_model.png')
 
     # Sanity check: does energy_distance actually discriminate a good fit from a bad one?
     X = info['dataset']
     n = X.shape[0]
-    final = snapshots[-1]
-    model_samples = sample_bisection(final['anchor_nodes'], final['precision'], final['Q'], N=n)
+    model_samples = sample_bisection(W, eta, Q, N=n)
 
     rng = np.random.default_rng(1)
     fresh_moons, _ = make_moons(n_samples=n, noise=0.1, random_state=1)
@@ -68,8 +71,7 @@ if __name__ == '__main__':
     nimp = M.sum()
 
     n_imputations = 20
-    imputations = impute_multiple(X, mask, final['Q'], final['anchor_nodes'], final['precision'],
-                                   n_imputations)  # (n_imputations, n, d)
+    imputations = impute_multiple(X, mask, Q, W, eta, n_imputations)  # (n_imputations, n, d)
 
     # OT, missing rows only: stack the n_imputations completions of just the affected rows
     stacked_M = imputations[:, M, :].reshape(-1, X.shape[1])  # (n_imputations * nimp, d)

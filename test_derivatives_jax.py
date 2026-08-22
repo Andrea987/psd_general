@@ -136,7 +136,47 @@ def test_lagrangian_gradient_precision_matches_jax():
     assert max_diff < 1e-8
 
 
+def lagrangian_fixed_omega_logeta_jax(W, log_eta, X, mask, Q, alpha, lbd, mu, omega_fixed):
+    """Same as lagrangian_fixed_omega_jax, but parametrized by log(precision) instead of precision
+    directly -- letting jax differentiate through the exp() gives the true d/d log(eta) gradient,
+    to check against the chain-rule reparametrization used in alternating_minimization.py
+    (precision = exp(log(precision) - l_rate_param * grad_eta * precision))."""
+    eta = jnp.exp(log_eta)
+    return lagrangian_fixed_omega_jax(W, eta, X, mask, Q, alpha, lbd, mu, omega_fixed)
+
+
+def test_lagrangian_gradient_log_precision_matches_chain_rule():
+    """
+    Option A reparametrization check (see alternating_minimization.py): taking the gradient step
+    on log(precision) instead of precision directly is done via the chain rule
+    (d lagrangian / d log(eta) = d lagrangian / d eta * eta) rather than by re-deriving the
+    gradient formulas from scratch. Verify that chain-rule-scaled analytic gradient against JAX
+    autodiff of the Lagrangian reparametrized in terms of log(precision) directly.
+    """
+    info = make_info()
+    omega_fixed = general_omega_star(info)
+
+    X = jnp.asarray(info['dataset'])
+    mask = jnp.asarray(info['masks'])
+    W = jnp.asarray(info['anchor_nodes'])
+    eta = info['precision']
+    log_eta = jnp.asarray(np.log(eta))
+    Q = jnp.asarray(info['Q'])
+
+    grad_log_eta_jax = jax.grad(lagrangian_fixed_omega_logeta_jax, argnums=1)(
+        W, log_eta, X, mask, Q, info['alpha'], info['lbd'], info['mu'], omega_fixed
+    )
+
+    grad_eta_analytic = general_lagrangian_gradient_precision(info)
+    grad_log_eta_analytic = grad_eta_analytic * eta  # chain rule: d/d log(eta) = (d/d eta) * eta
+
+    max_diff = np.max(np.abs(np.asarray(grad_log_eta_jax) - grad_log_eta_analytic))
+    print('d lagrangian / d log(precision): chain-rule analytic vs jax, max abs diff:', max_diff)
+    assert max_diff < 1e-8
+
+
 if __name__ == '__main__':
     test_lagrangian_gradient_anchor_nodes_matches_jax()
     test_lagrangian_gradient_precision_matches_jax()
+    test_lagrangian_gradient_log_precision_matches_chain_rule()
     print('all tests passed')

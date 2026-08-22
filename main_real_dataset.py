@@ -56,6 +56,14 @@ parser.add_argument('--dataset', type=str, default="iris",
                     help='dataset on which to run the experiments')
 parser.add_argument('--perc_test_set', type=float, default=0,
                     help='percentage of dataset held out as a test set')
+parser.add_argument('--large_dataset_threshold', type=int, default=1000,
+                    help='datasets with more observations than this use --max_train_obs for '
+                         'training and put everything else in the test set, ignoring '
+                         '--perc_test_set; datasets at or below this threshold use the usual '
+                         '--perc_test_set split')
+parser.add_argument('--max_train_obs', type=int, default=500,
+                    help='training-set size used for datasets over --large_dataset_threshold '
+                         '(see above)')
 parser.add_argument('--p', type=float, default=0.3, help='Proportion of imps')
 parser.add_argument('--MAR', action='store_true')
 parser.add_argument('--p_obs', type=float, default=0.3,
@@ -91,13 +99,19 @@ parser.add_argument('-qm', '--quantile_multiplier', type=float, default=0.05,
 
 # logging
 parser.add_argument('--verbose', action='store_true')
+parser.add_argument('--verbose_newton', action='store_true',
+                    help='print every Newton iteration (loss, decrement) inside each psd bounce, '
+                         'separately from --verbose (which only summarizes every 5th bounce)')
 parser.add_argument('--report_interval', type=int, default=500)
 
 # our method (psd_impute, see psd_imputer.py / fit_psd_model for what each of these controls)
 parser.add_argument('--psd_m', type=int, default=80,
                     help='number of anchor nodes')
-parser.add_argument('--psd_eta', type=float, default=2,
-                    help='initial precision of the Gaussians')
+parser.add_argument('--psd_eta', type=float, default=np.log(2),
+                    help='initial LOG-precision of the Gaussians -- actual starting precision '
+                         'is exp(this value), matching the log-space reparametrization used for '
+                         'the precision gradient step (see alternating_minimization). Ignored if '
+                         '--psd_eta_init_mode=empirical')
 parser.add_argument('--psd_alpha', type=float, default=1e-6,
                     help='parameter inside the log of the loss, log(Tr(Q.) + alpha)')
 parser.add_argument('--psd_lbd', type=float, default=1e-1,
@@ -117,6 +131,15 @@ parser.add_argument('--psd_newton_step_Q', type=int, default=50,
 parser.add_argument('--psd_n_imputations', type=int, default=10,
                     help='number of independent completions drawn for the multiple-imputation '
                          'OT/ED-vs-test-set metric (0 to disable)')
+parser.add_argument('--psd_anchor_init', type=str, default='data_subset',
+                    choices=['data_subset', 'uniform_hypercube'],
+                    help='data_subset: anchor nodes are a random subset of the mean-imputed data. '
+                         'uniform_hypercube: anchor nodes are sampled i.i.d. uniformly in the '
+                         'bounding box of the (mean-imputed) data')
+parser.add_argument('--psd_eta_init_mode', type=str, default='fixed',
+                    choices=['fixed', 'empirical'],
+                    help='fixed: every dimension starts at --psd_eta. empirical: every dimension '
+                         'starts at 1 / empirical_variance, computed from the observed entries')
 
 args = parser.parse_args()
 
@@ -150,11 +173,9 @@ if __name__ == "__main__":
 
     dataset_loaded = scale(dataset_loader(dataset))
 
-    LARGE_DATASET_THRESHOLD = 1000
-    TRAIN_SIZE_FOR_LARGE_DATASETS = 500
-    if dataset_loaded.shape[0] > LARGE_DATASET_THRESHOLD:
-        logging.info(f"dataset {dataset} has more than {LARGE_DATASET_THRESHOLD} observations, "
-                     f"using {TRAIN_SIZE_FOR_LARGE_DATASETS} for training and the rest as test set")
+    if dataset_loaded.shape[0] > args.large_dataset_threshold:
+        logging.info(f"dataset {dataset} has more than {args.large_dataset_threshold} observations, "
+                     f"using {args.max_train_obs} for training and the rest as test set")
 
     METHODS = ["psd", "OT", "ice", "mean", "softimpute", "lin_rr", "mlp_rr"]
 
@@ -187,10 +208,10 @@ if __name__ == "__main__":
 
     for n in range(args.nexp):
 
-        if dataset_loaded.shape[0] > LARGE_DATASET_THRESHOLD:
+        if dataset_loaded.shape[0] > args.large_dataset_threshold:
             idx = np.random.default_rng(args.seed + n).permutation(dataset_loaded.shape[0])
-            ground_truth = dataset_loaded[idx[:TRAIN_SIZE_FOR_LARGE_DATASETS]]
-            test_set = dataset_loaded[idx[TRAIN_SIZE_FOR_LARGE_DATASETS:]]
+            ground_truth = dataset_loaded[idx[:args.max_train_obs]]
+            test_set = dataset_loaded[idx[args.max_train_obs:]]
         elif args.perc_test_set > 0:
             ground_truth, test_set = train_test_split(dataset_loaded, test_size=args.perc_test_set)
         else:
@@ -252,6 +273,8 @@ if __name__ == "__main__":
             mu=psd_mu, l_rate_nodes=args.psd_lr_nodes, l_rate_param=args.psd_lr_param,
             nbr_bounce=args.psd_bounce, nbr_gradient_steps=args.psd_gradient_steps,
             nbr_newton_step_Q=args.psd_newton_step_Q, seed=args.seed + n, verbose=args.verbose,
+            verbose_newton=args.verbose_newton, anchor_init=args.psd_anchor_init,
+            eta_init_mode=args.psd_eta_init_mode,
             n_imputations=args.psd_n_imputations if n_test > 0 else 0,
         )
 

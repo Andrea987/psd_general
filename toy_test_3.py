@@ -43,16 +43,16 @@ def build_info(X, mask, W, nbr_bounce, seed):
     return {
         'dataset': X, 'masks': mask, 'anchor_nodes': W, 'precision': eta, 'Q': Q0,
         'alpha': 1e-6, 'lbd': 1e-4, 'mu': 1e-4,
-        'l_rate_nodes': 1e-1, 'l_rate_param': 1e-2,
+        'l_rate_nodes': 1e-1, 'l_rate_param': 1e-4,
         'nbr_bounce': nbr_bounce, 'nbr_gradient_steps': 5,
+        'verbose': True,
     }
 
 
 def run_experiment(X, mask, W, nbr_bounce, seed, save_path):
     info = build_info(X, mask, W, nbr_bounce, seed)
     Q, W_final, eta, history = alternating_minimization(info)
-    final_snapshot = {'Q': Q, 'anchor_nodes': W_final, 'precision': eta, 'loss': history[-1][0]}
-    plot_initial_vs_final_model(info, [final_snapshot], save_path=save_path)
+    plot_initial_vs_final_model(info, Q, W_final, eta, history[-1][0], save_path=save_path)
 
 
 if __name__ == '__main__':

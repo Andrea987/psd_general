@@ -1,7 +1,8 @@
 import numpy as np
 from sklearn.datasets import make_circles
 
-from plot_toy_2d import run_and_collect_steps, plot_steps, plot_initial_vs_final_model
+from alternating_minimization import alternating_minimization
+from plot_toy_2d import plot_initial_vs_final_model
 
 
 def generate_toy_info(n=400, m=30, seed=0):
@@ -27,12 +28,15 @@ def generate_toy_info(n=400, m=30, seed=0):
     return {
         'dataset': X, 'masks': mask, 'anchor_nodes': W, 'precision': eta, 'Q': Q0,
         'alpha': 1e-6, 'lbd': 0.0001, 'mu': 0.0001,
-        'l_rate_nodes': 1e-1, 'l_rate_param': 1e-2, 'nbr_bounce': 1, 'nbr_gradient_steps': 5,
+        'l_rate_nodes': 1e-1, 'l_rate_param': 1e-4, 'nbr_bounce': 1, 'nbr_gradient_steps': 5,
+        'verbose': True,
     }
 
 
 if __name__ == '__main__':
     info = generate_toy_info()
-    snapshots = run_and_collect_steps(info, num_steps=30)
-    plot_steps(info, snapshots, save_path='toy_test_2_steps.png')
-    plot_initial_vs_final_model(info, snapshots, save_path='toy_test_2_final_model.png')
+    info = dict(info)
+    info['nbr_bounce'] = 30
+    Q, W, eta, history = alternating_minimization(info)
+    final_loss, final_lagrangian = history[-1]
+    plot_initial_vs_final_model(info, Q, W, eta, final_loss, save_path='toy_test_2_final_model.png')
