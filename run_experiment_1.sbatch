@@ -42,6 +42,15 @@ conda activate psd_general
 #   --psd_newton_step_Q       max Newton iterations per Q update
 #   --verbose_newton          print every Newton iteration (loss, decrement) inside every bounce's
 #                             inner Q update, separately from --verbose's per-5-bounce summary
+#   --psd_cross_validate      before fitting, cross-validate --psd_lr_nodes/--psd_lr_param/
+#                             --psd_eta on a small, fast validation subsample and use the best
+#                             combination (overrides those three flags)
+#   --psd_cv_n                validation subsample size for --psd_cross_validate
+#   --psd_cv_m                number of anchor nodes for --psd_cross_validate
+#   --psd_cv_bounce           number of alternating minimization bounces for --psd_cross_validate
+#   --psd_cv_lr_nodes_grid    comma-separated candidate values for --psd_lr_nodes
+#   --psd_cv_lr_param_grid    comma-separated candidate values for --psd_lr_param
+#   --psd_cv_eta_grid         comma-separated candidate LOG-precision starting points for --psd_eta
 
 datasets=(
     "airfoil_self_noise"
@@ -94,6 +103,13 @@ python3 -u main_real_dataset.py \
     --psd_bounce=100 \
     --psd_gradient_steps=2 \
     --psd_newton_step_Q=2 \
+    --psd_cross_validate \
+    --psd_cv_n=200 \
+    --psd_cv_m=10 \
+    --psd_cv_bounce=20 \
+    --psd_cv_lr_nodes_grid=1e-4,1e-3,1e-2 \
+    --psd_cv_lr_param_grid=1e-5,1e-4,1e-3 \
+    --psd_cv_eta_grid=0.0,0.693147,1.609438 \
     --verbose \
     --verbose_newton
 
