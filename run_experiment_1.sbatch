@@ -86,7 +86,6 @@ python3 -u main_real_dataset.py \
     --sinkhorn_niter=3000 \
     --psd_m=200 \
     --psd_eta=1.6 \
-    --psd_eta_init_mode=empirical \
     --psd_alpha=1e-6 \
     --psd_lbd=1e-1 \
     --psd_mu=1e-4 \
