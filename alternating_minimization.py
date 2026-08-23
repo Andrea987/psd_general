@@ -20,6 +20,11 @@ def _impute_mean_and_score(dataset, mask, Q, anchor_nodes, precision, dataset_tr
     are scored elsewhere, e.g. main_real_dataset.py), ED on the full arrays. Local, cut-down
     duplicate of psd_imputer.impute_mean's loop -- see the import comment above.
 
+    These are ORACLE metrics: dataset_true holds the real values at the positions mask hides, which
+    the fit never has access to (it only ever sees dataset with those entries blanked) -- this is
+    purely a diagnostic, not something available in a real deployment where the true values behind
+    missing entries are, by definition, unknown.
+
     :return: (mae, rmse, ot_dist, ed) -- ot_dist is None if there are no masked rows, or too many
         for a full transport-cost computation to be worth it (see otlim)
     """
@@ -169,7 +174,8 @@ def alternating_minimization(info):
                     info['precision'], dataset_true,
                 )
                 ot_str = f"{ot_dist:.4f}" if ot_dist is not None else "n/a"
-                print(f"  metrics @ bounce {step + 1}:\tMAE: {mae:.4f}\tRMSE: {rmse:.4f}\t"
-                      f"OT: {ot_str}\tED: {ed:.4f}")
+                print(f"  oracle metrics @ bounce {step + 1} (imputed dataset vs. true "
+                      f"underlying training data, at the entries hidden from the fit):\t"
+                      f"MAE: {mae:.4f}\tRMSE: {rmse:.4f}\tOT: {ot_str}\tED: {ed:.4f}")
 
     return info['Q'], info['anchor_nodes'], info['precision'], history

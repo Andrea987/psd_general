@@ -58,8 +58,9 @@ def fit_psd_model(dataset, masks, m, eta_init, alpha, lbd, mu, l_rate_nodes, l_r
         bypassing anchor_init entirely (e.g. for cross_validate_anchor_nodes, which needs to try
         specific candidate anchor sets rather than let fit_psd_model pick its own)
     :param dataset_true: if given (and verbose is True), the true (unmasked) (n, d) array used to
-        print MAE/RMSE/OT/ED at every 5th bounce -- purely diagnostic, see
-        alternating_minimization._impute_mean_and_score
+        print ORACLE MAE/RMSE/OT/ED at every 5th bounce (and the last bounce) -- oracle because it
+        compares against the real values behind the entries masks hides, which the fit itself
+        never sees; purely diagnostic, see alternating_minimization._impute_mean_and_score
     :return: (Q, anchor_nodes, precision, history), see alternating_minimization
     """
     n, d = dataset.shape
@@ -242,6 +243,9 @@ def cross_validate_hyperparams(dataset_loaded, p, lr_nodes_grid, lr_param_grid, 
     X_true_cv = X_cv.copy()
     X_nas_cv = np.where(combined_mask, np.nan, X_cv)
 
+    if verbose:
+        _print_cv_setup(base_mask, extra_hide)
+
     results = []
     for lr_nodes in lr_nodes_grid:
         for lr_param in lr_param_grid:
@@ -265,6 +269,21 @@ def cross_validate_hyperparams(dataset_loaded, p, lr_nodes_grid, lr_param_grid, 
     best = min(results, key=lambda r: r[metric_idx])
     best_lr_nodes, best_lr_param, best_eta, best_score = best[0], best[1], best[2], best[metric_idx]
     return best_lr_nodes, best_lr_param, best_eta, best_score, results
+
+
+def _print_cv_setup(base_mask, extra_hide):
+    """Print, once per CV call, what the validation masking actually did and what each printed
+    metric compares -- see _cv_score."""
+    n_base = int(base_mask.sum())
+    n_extra = int(extra_hide.sum())
+    print(f"  CV setup: {n_base} entries were already missing beforehand (base mask); "
+          f"{n_extra} additional entries were hidden on top of that purely for validation "
+          f"(extra_hide) -- these are the ones being scored. "
+          f"RMSE = imputed vs. true value, at the {n_extra} extra-hidden entries only. "
+          f"ED/OT compare whole rows, so for those two the {n_base} entries that were already "
+          f"missing beforehand are set to 0 in BOTH the imputed and true arrays first (so they "
+          f"cancel out and contribute nothing); what's left is again effectively just the "
+          f"extra-hidden entries' imputed values vs. their true values.")
 
 
 def _cv_score(X_imputed, X_true_cv, extra_hide, base_mask, metric, otlim=5000):
@@ -362,6 +381,9 @@ def cross_validate_anchor_nodes(dataset_loaded, p, m, lr_nodes, lr_param, eta_in
     combined_mask = base_mask | extra_hide
     X_true_cv = X_cv.copy()
     X_nas_cv = np.where(combined_mask, np.nan, X_cv)
+
+    if verbose:
+        _print_cv_setup(base_mask, extra_hide)
 
     results = []
     best_anchor_nodes, best_score = None, np.inf

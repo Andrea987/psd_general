@@ -64,9 +64,11 @@ conda activate psd_general
 #                             before extra-hiding are zeroed out in both the imputed and true
 #                             arrays first, so the score only reflects recovery of the
 #                             extra-hidden entries
-#   --psd_verbose_metrics     alongside --verbose, also print MAE/RMSE/OT/ED every 5th bounce
-#                             (mean-imputed against the true training data) -- more expensive,
-#                             opt-in separately from the rest of --verbose's output
+#   --psd_verbose_metrics     alongside --verbose, also print ORACLE MAE/RMSE/OT/ED every 5th
+#                             bounce (and the last bounce): mean-imputed dataset vs. the true
+#                             underlying training data, at the entries hidden from the fit --
+#                             oracle since the fit itself never sees those true values. More
+#                             expensive, opt-in separately from the rest of --verbose's output
 
 datasets=(
     "airfoil_self_noise"
