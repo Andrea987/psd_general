@@ -88,7 +88,7 @@ python3 -u main_real_dataset.py \
     --psd_eta=1.6 \
     --psd_alpha=1e-6 \
     --psd_lbd=1e-1 \
-    --psd_mu=1e-4 \
+    --psd_mu=1e-3 \
     --psd_lr_nodes=1e-3 \
     --psd_lr_param=1e-4 \
     --psd_bounce=1 \

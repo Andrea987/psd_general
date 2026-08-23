@@ -50,9 +50,20 @@ def newton_method(info):
             directional_derivative = -lambda_Q_squared  # <grad f(Q), direction> = -lambda_Q^2
 
             # backtracking line search: shrink the step until Q_candidate stays positive definite
-            # (the domain of -log det(Q)) and satisfies the Armijo sufficient-decrease condition
+            # (the domain of -log det(Q)) and satisfies the Armijo sufficient-decrease condition.
+            # t shrinking below machine precision means neither condition is meaningfully
+            # satisfiable (the direction is numerically unreliable, e.g. an ill-conditioned
+            # Hessian solve) -- bail out with Q unchanged rather than spin for ~3000 more
+            # iterations until t underflows to exact 0.0 (at which point the Armijo check would
+            # trivially pass anyway, since f_Q <= f_Q).
             t = 1.0
             while True:
+                if t < np.finfo(float).eps:
+                    print(f"    Warning: backtracking line search step size underflowed below "
+                          f"machine precision (t={t:.3e}); leaving Q unchanged for this Newton "
+                          f"iteration.")
+                    Q_candidate = Q
+                    break
                 Q_candidate = Q + t * direction
                 try:
                     np.linalg.cholesky(Q_candidate)
