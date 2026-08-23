@@ -4,7 +4,7 @@
 #
 
 #SBATCH --job-name=missing_real_data
-#SBATCH --array=0-3
+#SBATCH --array=0-0
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
@@ -76,9 +76,9 @@ datasets=(
 )
 
 datasets1=(
-     "airfoil_self_noise"
-     "yeast"
-     "blood_transfusion"
+     #"airfoil_self_noise"
+     #"yeast"
+     #"blood_transfusion"
      "concrete_compression"   
 )
 
