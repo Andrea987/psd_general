@@ -31,7 +31,7 @@ from MissingDataOT_master.softimpute import softimpute, cv_softimpute
 from MissingDataOT_master.data_loaders import dataset_loader
 from MissingDataOT_master.imputers import OTimputer, RRimputer
 
-from psd_imputer import psd_impute, cross_validate_hyperparams
+from psd_imputer import psd_impute, cross_validate_hyperparams, cross_validate_anchor_nodes
 from psd import energy_distance
 
 import argparse
@@ -102,6 +102,11 @@ parser.add_argument('--verbose', action='store_true')
 parser.add_argument('--verbose_newton', action='store_true',
                     help='print every Newton iteration (loss, decrement) inside each psd bounce, '
                          'separately from --verbose (which only summarizes every 5th bounce)')
+parser.add_argument('--psd_verbose_metrics', action='store_true',
+                    help='alongside --verbose, also print MAE/RMSE/OT/ED (mean-imputed against '
+                         'the true training data) every 5th bounce -- more expensive than the '
+                         'other --verbose output, since it mean-imputes the whole training set '
+                         'each time it prints, so opt-in separately')
 parser.add_argument('--report_interval', type=int, default=500)
 
 # our method (psd_impute, see psd_imputer.py / fit_psd_model for what each of these controls)
@@ -159,6 +164,20 @@ parser.add_argument('--psd_cv_lr_param_grid', type=str, default='1e-5,1e-4,1e-3'
 parser.add_argument('--psd_cv_eta_grid', type=str, default='0.0,0.693147,1.609438',
                     help='comma-separated candidate LOG-precision starting points for --psd_eta')
 
+# fast cross-validation of the anchor nodes themselves, run after the hyperparameter CV above
+# (see psd_imputer.cross_validate_anchor_nodes)
+parser.add_argument('--psd_anchor_cross_validate', action='store_true',
+                    help='after psd_lr_nodes/psd_lr_param/psd_eta are chosen (by CV or by hand), '
+                         'try --psd_cv_anchor_trials random m-row anchor-node subsamples (m = '
+                         '--psd_m), score each with a Newton-only fit (no anchor/precision '
+                         'movement) on a small validation subsample, and use the best one for '
+                         'the real fit -- overrides --psd_anchor_init')
+parser.add_argument('--psd_cv_anchor_trials', type=int, default=5,
+                    help='number of candidate anchor-node subsamples to try for '
+                         '--psd_anchor_cross_validate')
+parser.add_argument('--psd_cv_anchor_newton_steps', type=int, default=10,
+                    help='max Newton iterations per candidate for --psd_anchor_cross_validate')
+
 args = parser.parse_args()
 
 np.random.seed(args.seed)
@@ -194,28 +213,6 @@ if __name__ == "__main__":
     if dataset_loaded.shape[0] > args.large_dataset_threshold:
         logging.info(f"dataset {dataset} has more than {args.large_dataset_threshold} observations, "
                      f"using {args.max_train_obs} for training and the rest as test set")
-
-    if args.psd_cross_validate:
-        lr_nodes_grid = [float(x) for x in args.psd_cv_lr_nodes_grid.split(',')]
-        lr_param_grid = [float(x) for x in args.psd_cv_lr_param_grid.split(',')]
-        eta_grid = [float(x) for x in args.psd_cv_eta_grid.split(',')]
-        logging.info(f"cross-validating psd_lr_nodes/psd_lr_param/psd_eta on a "
-                     f"{min(args.psd_cv_n, dataset_loaded.shape[0])}-observation, "
-                     f"{args.psd_cv_m}-anchor-node validation subsample "
-                     f"({len(lr_nodes_grid) * len(lr_param_grid) * len(eta_grid)} combinations)...")
-        best_lr_nodes, best_lr_param, best_eta, best_rmse, _ = cross_validate_hyperparams(
-            dataset_loaded, args.p, lr_nodes_grid, lr_param_grid, eta_grid,
-            m_cv=args.psd_cv_m, n_cv=args.psd_cv_n, nbr_bounce_cv=args.psd_cv_bounce,
-            nbr_gradient_steps=args.psd_gradient_steps, nbr_newton_step_Q=args.psd_newton_step_Q,
-            alpha=args.psd_alpha, lbd=args.psd_lbd, mu=args.psd_mu, seed=args.seed, verbose=True,
-        )
-        logging.info(f"cross-validation winner: psd_lr_nodes={best_lr_nodes:.1e}  "
-                     f"psd_lr_param={best_lr_param:.1e}  psd_eta={best_eta:.4f}  "
-                     f"(validation RMSE={best_rmse:.4f})")
-        args.psd_lr_nodes = best_lr_nodes
-        args.psd_lr_param = best_lr_param
-        args.psd_eta = best_eta
-        args.psd_eta_init_mode = 'fixed'
 
     METHODS = ["psd", "OT", "ice", "mean", "softimpute", "lin_rr", "mlp_rr"]
 
@@ -273,6 +270,43 @@ if __name__ == "__main__":
                      f"test split: {test_split:.2%}\t"
                      f"train missingness (p): {p:.2%}")
 
+        if args.psd_cross_validate:
+            lr_nodes_grid = [float(x) for x in args.psd_cv_lr_nodes_grid.split(',')]
+            lr_param_grid = [float(x) for x in args.psd_cv_lr_param_grid.split(',')]
+            eta_grid = [float(x) for x in args.psd_cv_eta_grid.split(',')]
+            logging.info(f"cross-validating psd_lr_nodes/psd_lr_param/psd_eta on a "
+                         f"{min(args.psd_cv_n, ground_truth.shape[0])}-observation, "
+                         f"{args.psd_cv_m}-anchor-node validation subsample "
+                         f"({len(lr_nodes_grid) * len(lr_param_grid) * len(eta_grid)} combinations)...")
+            best_lr_nodes, best_lr_param, best_eta, best_rmse, _ = cross_validate_hyperparams(
+                ground_truth, args.p, lr_nodes_grid, lr_param_grid, eta_grid,
+                m_cv=args.psd_cv_m, n_cv=args.psd_cv_n, nbr_bounce_cv=args.psd_cv_bounce,
+                nbr_gradient_steps=args.psd_gradient_steps, nbr_newton_step_Q=args.psd_newton_step_Q,
+                alpha=args.psd_alpha, lbd=args.psd_lbd, mu=args.psd_mu, seed=args.seed + n,
+                verbose=True,
+            )
+            logging.info(f"cross-validation winner: psd_lr_nodes={best_lr_nodes:.1e}  "
+                         f"psd_lr_param={best_lr_param:.1e}  psd_eta={best_eta:.4f}  "
+                         f"(validation RMSE={best_rmse:.4f})")
+            args.psd_lr_nodes = best_lr_nodes
+            args.psd_lr_param = best_lr_param
+            args.psd_eta = best_eta
+            args.psd_eta_init_mode = 'fixed'
+
+        cv_anchor_nodes = None
+        if args.psd_anchor_cross_validate:
+            logging.info(f"cross-validating psd anchor nodes: {args.psd_cv_anchor_trials} trials, "
+                         f"m={args.psd_m}, up to {args.psd_cv_anchor_newton_steps} Newton "
+                         f"iterations each...")
+            cv_anchor_nodes, best_anchor_rmse, _ = cross_validate_anchor_nodes(
+                ground_truth, args.p, args.psd_m, args.psd_lr_nodes, args.psd_lr_param,
+                args.psd_eta, n_trials=args.psd_cv_anchor_trials, n_cv=args.psd_cv_n,
+                newton_steps=args.psd_cv_anchor_newton_steps,
+                alpha=args.psd_alpha, lbd=args.psd_lbd, mu=args.psd_mu, seed=args.seed + n,
+                verbose=True,
+            )
+            logging.info(f"anchor-node cross-validation winner: RMSE={best_anchor_rmse:.4f}")
+
         ### Each entry from the second axis has a probability p of being NA
 
         if args.MAR:
@@ -314,7 +348,8 @@ if __name__ == "__main__":
             nbr_bounce=args.psd_bounce, nbr_gradient_steps=args.psd_gradient_steps,
             nbr_newton_step_Q=args.psd_newton_step_Q, seed=args.seed + n, verbose=args.verbose,
             verbose_newton=args.verbose_newton, anchor_init=args.psd_anchor_init,
-            eta_init_mode=args.psd_eta_init_mode,
+            eta_init_mode=args.psd_eta_init_mode, fixed_anchor_nodes=cv_anchor_nodes,
+            dataset_true=ground_truth if args.psd_verbose_metrics else None,
             n_imputations=args.psd_n_imputations if n_test > 0 else 0,
         )
 

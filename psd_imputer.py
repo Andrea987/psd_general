@@ -15,7 +15,8 @@ from sampling import mean as model_mean, sample_bisection, check_normalized
 
 def fit_psd_model(dataset, masks, m, eta_init, alpha, lbd, mu, l_rate_nodes, l_rate_param,
                    nbr_bounce, nbr_gradient_steps, nbr_newton_step_Q, seed=0, verbose=False,
-                   verbose_newton=False, anchor_init='data_subset', eta_init_mode='fixed'):
+                   verbose_newton=False, anchor_init='data_subset', eta_init_mode='fixed',
+                   fixed_anchor_nodes=None, dataset_true=None):
     """
     :param dataset: (n, d) data; entries on the missing (masks == True) positions are never read
     :param masks: (n, d) boolean (or 0/1), True/1 = missing
@@ -51,6 +52,12 @@ def fit_psd_model(dataset, masks, m, eta_init, alpha, lbd, mu, l_rate_nodes, l_r
     :param eta_init_mode: 'fixed' (default) starts every dimension's precision at eta_init;
         'empirical' instead starts each dimension's precision at 1 / empirical_variance, the
         per-dimension variance of the observed (non-missing) entries
+    :param fixed_anchor_nodes: if given, an (m, d) array used directly as the anchor nodes,
+        bypassing anchor_init entirely (e.g. for cross_validate_anchor_nodes, which needs to try
+        specific candidate anchor sets rather than let fit_psd_model pick its own)
+    :param dataset_true: if given (and verbose is True), the true (unmasked) (n, d) array used to
+        print MAE/RMSE/OT/ED at every 5th bounce -- purely diagnostic, see
+        alternating_minimization._impute_mean_and_score
     :return: (Q, anchor_nodes, precision, history), see alternating_minimization
     """
     n, d = dataset.shape
@@ -60,7 +67,9 @@ def fit_psd_model(dataset, masks, m, eta_init, alpha, lbd, mu, l_rate_nodes, l_r
     dataset_nan = np.where(masks_bool, np.nan, dataset)
     initial_imputed = SimpleImputer(strategy='mean').fit_transform(dataset_nan)
 
-    if anchor_init == 'uniform_hypercube':
+    if fixed_anchor_nodes is not None:
+        anchor_nodes = np.asarray(fixed_anchor_nodes, dtype=float).copy()
+    elif anchor_init == 'uniform_hypercube':
         low, high = initial_imputed.min(axis=0), initial_imputed.max(axis=0)
         anchor_nodes = rng.uniform(low, high, size=(m, d))
     else:
@@ -83,6 +92,7 @@ def fit_psd_model(dataset, masks, m, eta_init, alpha, lbd, mu, l_rate_nodes, l_r
         'l_rate_nodes': l_rate_nodes, 'l_rate_param': l_rate_param,
         'nbr_bounce': nbr_bounce, 'nbr_gradient_steps': nbr_gradient_steps,
         'max_iter': nbr_newton_step_Q, 'verbose': verbose, 'verbose_newton': verbose_newton,
+        'dataset_true': dataset_true,
     }
     Q, anchor_nodes, precision, history = alternating_minimization(info)
     check_normalized(anchor_nodes, precision, Q)
@@ -135,13 +145,14 @@ def impute_multiple(dataset, mask, Q, anchor_nodes, precision, n_imputations):
 def psd_impute(X_nas, mask, m=50, eta_init=2.0, alpha=1e-6, lbd=1e-4, mu=1e-4,
                l_rate_nodes=1e-1, l_rate_param=1e-2, nbr_bounce=30, nbr_gradient_steps=5,
                nbr_newton_step_Q=100, seed=0, verbose=False, verbose_newton=False,
-               anchor_init='data_subset', eta_init_mode='fixed', n_imputations=0):
+               anchor_init='data_subset', eta_init_mode='fixed', fixed_anchor_nodes=None,
+               dataset_true=None, n_imputations=0):
     """
     :param X_nas: (n, d) data, NaN on the missing entries
     :param mask: (n, d) boolean (or 0/1), True/1 = missing
     :param m, eta_init, alpha, lbd, mu, l_rate_nodes, l_rate_param, nbr_bounce,
         nbr_gradient_steps, nbr_newton_step_Q, seed, verbose, verbose_newton, anchor_init,
-        eta_init_mode: see fit_psd_model
+        eta_init_mode, fixed_anchor_nodes, dataset_true: see fit_psd_model
     :param n_imputations: if > 0, also draw this many independent completions per row by sampling
         (rather than taking the mean of) each row's conditional distribution, reusing the same fit
         (see impute_multiple)
@@ -157,7 +168,8 @@ def psd_impute(X_nas, mask, m=50, eta_init=2.0, alpha=1e-6, lbd=1e-4, mu=1e-4,
         dataset, mask.astype(float), m, eta_init, alpha, lbd, mu,
         l_rate_nodes, l_rate_param, nbr_bounce, nbr_gradient_steps, nbr_newton_step_Q, seed=seed,
         verbose=verbose, verbose_newton=verbose_newton, anchor_init=anchor_init,
-        eta_init_mode=eta_init_mode,
+        eta_init_mode=eta_init_mode, fixed_anchor_nodes=fixed_anchor_nodes,
+        dataset_true=dataset_true,
     )
 
     X_imputed = impute_mean(dataset, mask, Q, W, eta)
@@ -238,4 +250,83 @@ def cross_validate_hyperparams(dataset_loaded, p, lr_nodes_grid, lr_param_grid, 
 
     best_lr_nodes, best_lr_param, best_eta, best_rmse = min(results, key=lambda r: r[3])
     return best_lr_nodes, best_lr_param, best_eta, best_rmse, results
+
+
+def cross_validate_anchor_nodes(dataset_loaded, p, m, lr_nodes, lr_param, eta_init, n_trials=5,
+                                 n_cv=200, newton_steps=10, alpha=1e-6, lbd=1e-1, mu=1e-3, seed=0,
+                                 verbose=False):
+    """
+    Fast cross-validation for the CHOICE of anchor nodes, run after cross_validate_hyperparams (or
+    with hand-picked hyperparameters): try n_trials random m-row subsamples of dataset_loaded as
+    candidate anchor-node sets, score each by running just the Newton method (nbr_bounce=1, so
+    anchor_nodes/precision are never moved -- there's no gradient-step phase with a single bounce)
+    for up to newton_steps iterations on a small validation subsample (same hide-extra-entries /
+    RMSE methodology as cross_validate_hyperparams, drawn once and reused across every candidate so
+    they're compared on the same data), and returns the anchor set with lowest RMSE.
+
+    :param dataset_loaded: (N, d) fully-observed data to draw candidate anchor nodes AND the
+        validation subsample from (e.g. the experiment's ground_truth training split)
+    :param p: MCAR probability, used both for the base mask and the additional validation mask
+        (same convention as the main experiment's --p)
+    :param m: number of anchor nodes -- should match the m used for the real run
+    :param lr_nodes, lr_param, eta_init: the hyperparameters already chosen (e.g. by
+        cross_validate_hyperparams); held fixed throughout this stage since bounce=1 means they're
+        never actually used for a gradient step anyway
+    :param n_trials: number of candidate anchor-node subsamples to try (default 5)
+    :param n_cv: validation subsample size (default 200)
+    :param newton_steps: max Newton iterations per candidate (default 10)
+    :param alpha, lbd, mu, seed: see fit_psd_model (lbd/mu divided by n_cv, matching the
+        full-scale convention)
+    :param verbose: if True, print every candidate's validation RMSE
+    :return: (best_anchor_nodes, best_rmse, results) -- best_anchor_nodes is (m, d); results is
+        the list of (trial_index, rmse) tuples tried, in order
+    """
+    rng = np.random.default_rng(seed)
+    n_total, d = dataset_loaded.shape
+    n_cv = min(n_cv, n_total)
+
+    # validation subsample + extra-hiding, drawn once and reused for every candidate anchor set
+    # (same construction as cross_validate_hyperparams)
+    val_idx = rng.choice(n_total, size=n_cv, replace=False)
+    X_cv = dataset_loaded[val_idx]
+
+    base_mask = rng.random((n_cv, d)) < p
+    fully_missing = np.where(base_mask.sum(axis=1) == d)[0]
+    if len(fully_missing) > 0:
+        revealed = rng.integers(0, d, size=len(fully_missing))
+        base_mask[fully_missing, revealed] = False
+
+    observed = ~base_mask
+    extra_hide = (rng.random((n_cv, d)) < p) & observed
+    would_be_fully_missing = np.where((base_mask | extra_hide).sum(axis=1) == d)[0]
+    extra_hide[would_be_fully_missing] = False
+
+    combined_mask = base_mask | extra_hide
+    X_true_cv = X_cv.copy()
+    X_nas_cv = np.where(combined_mask, np.nan, X_cv)
+
+    results = []
+    best_anchor_nodes, best_rmse = None, np.inf
+
+    for trial in range(n_trials):
+        anchor_idx = rng.choice(n_total, size=m, replace=(m > n_total))
+        candidate_anchors = dataset_loaded[anchor_idx].copy()
+
+        X_imputed, _, _ = psd_impute(
+            X_nas_cv, combined_mask,
+            m=m, eta_init=eta_init, alpha=alpha, lbd=lbd / n_cv, mu=mu / n_cv,
+            l_rate_nodes=lr_nodes, l_rate_param=lr_param,
+            nbr_bounce=1, nbr_gradient_steps=1, nbr_newton_step_Q=newton_steps,
+            seed=seed, fixed_anchor_nodes=candidate_anchors,
+        )
+        rmse = float(np.sqrt(np.mean((X_imputed[extra_hide] - X_true_cv[extra_hide]) ** 2)))
+        results.append((trial, rmse))
+        if verbose:
+            print(f"  Anchor CV trial {trial + 1}/{n_trials}: RMSE={rmse:.4f}")
+
+        if rmse < best_rmse:
+            best_rmse = rmse
+            best_anchor_nodes = candidate_anchors
+
+    return best_anchor_nodes, best_rmse, results
 

@@ -1,10 +1,51 @@
 import time
 
 import numpy as np
-from psd import K_S, H_NS, H_eta
+import ot
+
+from psd import K_S, H_NS, H_eta, energy_distance
 from general_loss import general_H, general_loss, general_lagrangian
 from derivatives import general_lagrangian_gradient_anchor_nodes, general_lagrangian_gradient_precision
 from optimization import newton_method
+# imported directly (not via psd_imputer.impute_mean) to avoid a circular import: psd_imputer
+# imports this module
+from marginalize_condition import condition
+from sampling import mean as model_mean
+
+
+def _impute_mean_and_score(dataset, mask, Q, anchor_nodes, precision, dataset_true, otlim=5000):
+    """
+    Mean-impute dataset (missing entries per mask, using the given Q/anchor_nodes/precision), then
+    score against dataset_true: MAE/RMSE/OT at the masked positions (matching how these methods
+    are scored elsewhere, e.g. main_real_dataset.py), ED on the full arrays. Local, cut-down
+    duplicate of psd_imputer.impute_mean's loop -- see the import comment above.
+
+    :return: (mae, rmse, ot_dist, ed) -- ot_dist is None if there are no masked rows, or too many
+        for a full transport-cost computation to be worth it (see otlim)
+    """
+    mask = np.asarray(mask, dtype=bool)
+    n = dataset.shape[0]
+    X_imputed = dataset.copy()
+    for i in range(n):
+        row_mask = mask[i]
+        if not row_mask.any():
+            continue
+        W_ns, eta_ns, Q_cond = condition(anchor_nodes, precision, Q, row_mask, dataset[i])
+        X_imputed[i, row_mask] = model_mean(W_ns, eta_ns, Q_cond)
+
+    M = mask.sum(axis=1) > 0
+    nimp = int(M.sum())
+    diff = X_imputed[M] - dataset_true[M]
+    mae = float(np.mean(np.abs(diff))) if nimp > 0 else float('nan')
+    rmse = float(np.sqrt(np.mean(diff ** 2))) if nimp > 0 else float('nan')
+    ed = energy_distance(X_imputed, dataset_true)
+
+    ot_dist = None
+    if 0 < nimp < otlim:
+        dists = ((X_imputed[M][:, None] - dataset_true[M]) ** 2).sum(axis=2) / 2.
+        ot_dist = float(ot.emd2(np.ones(nimp) / nimp, np.ones(nimp) / nimp, dists))
+
+    return mae, rmse, ot_dist, ed
 
 
 def general_lagrangian_fixed(info):
@@ -117,5 +158,15 @@ def alternating_minimization(info):
                         f"|grad precision|: {grad_eta_norm:.6f}")
             msg += f"\tprecision: {np.array2string(info['precision'], precision=4)}"
             print(msg)
+
+            dataset_true = info.get('dataset_true')
+            if dataset_true is not None:
+                mae, rmse, ot_dist, ed = _impute_mean_and_score(
+                    info['dataset'], info['masks'], info['Q'], info['anchor_nodes'],
+                    info['precision'], dataset_true,
+                )
+                ot_str = f"{ot_dist:.4f}" if ot_dist is not None else "n/a"
+                print(f"  metrics @ bounce {step + 1}:\tMAE: {mae:.4f}\tRMSE: {rmse:.4f}\t"
+                      f"OT: {ot_str}\tED: {ed:.4f}")
 
     return info['Q'], info['anchor_nodes'], info['precision'], history

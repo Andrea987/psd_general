@@ -51,6 +51,14 @@ conda activate psd_general
 #   --psd_cv_lr_nodes_grid    comma-separated candidate values for --psd_lr_nodes
 #   --psd_cv_lr_param_grid    comma-separated candidate values for --psd_lr_param
 #   --psd_cv_eta_grid         comma-separated candidate LOG-precision starting points for --psd_eta
+#   --psd_anchor_cross_validate  after hyperparameters are chosen, try --psd_cv_anchor_trials
+#                             random m-row anchor-node subsamples (m = --psd_m), score each with a
+#                             Newton-only fit on a small validation subsample, and use the best one
+#   --psd_cv_anchor_trials    number of candidate anchor-node subsamples to try
+#   --psd_cv_anchor_newton_steps  max Newton iterations per anchor-node candidate
+#   --psd_verbose_metrics     alongside --verbose, also print MAE/RMSE/OT/ED every 5th bounce
+#                             (mean-imputed against the true training data) -- more expensive,
+#                             opt-in separately from the rest of --verbose's output
 
 datasets=(
     "airfoil_self_noise"
@@ -109,8 +117,12 @@ python3 -u main_real_dataset.py \
     --psd_cv_bounce=20 \
     --psd_cv_lr_nodes_grid=1e-4,1e-3,1e-2 \
     --psd_cv_lr_param_grid=1e-5,1e-4,1e-3 \
-    --psd_cv_eta_grid=-1.2,-0.8,-0.4,0.0,0.4,0.8,1.2 \
+    --psd_cv_eta_grid=-1.2,-1.0,-0.8,-0.6,-0.4,-0.2,0.0,0.2,0.4,0.6,0.8,1.0,1.2 \
+    --psd_anchor_cross_validate \
+    --psd_cv_anchor_trials=5 \
+    --psd_cv_anchor_newton_steps=5 \
     --verbose \
-    --verbose_newton
+    --verbose_newton \
+    --psd_verbose_metrics
 
 
