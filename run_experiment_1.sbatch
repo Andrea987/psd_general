@@ -36,9 +36,12 @@ conda activate psd_general
 #   --psd_mu                  hyperparameter of the logdet regularizer
 #   --psd_lr_nodes            learning rate for the anchor nodes
 #   --psd_lr_param            learning rate for the precision
-#   --psd_bounce              number of alternating minimization steps
+#   --psd_bounce              number of alternating minimization steps (1 = Newton solve only,
+#                             no gradient steps on anchor nodes/precision)
 #   --psd_gradient_steps      gradient steps per bounce
 #   --psd_newton_step_Q       max Newton iterations per Q update
+#   --verbose_newton          print every Newton iteration (loss, decrement) inside every bounce's
+#                             inner Q update, separately from --verbose's per-5-bounce summary
 
 datasets=(
     "airfoil_self_noise"
@@ -90,9 +93,10 @@ python3 -u main_real_dataset.py \
     --psd_mu=1e-4 \
     --psd_lr_nodes=1e-3 \
     --psd_lr_param=1e-4 \
-    --psd_bounce=100 \
+    --psd_bounce=1 \
     --psd_gradient_steps=3 \
     --psd_newton_step_Q=3 \
-    --verbose
+    --verbose \
+    --verbose_newton
 
 
