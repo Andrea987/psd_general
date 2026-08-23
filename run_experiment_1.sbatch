@@ -116,9 +116,9 @@ python3 -u main_real_dataset.py \
     --psd_mu=1e-3 \
     --psd_lr_nodes=1e-3 \
     --psd_lr_param=1e-4 \
-    --psd_bounce=10 \
+    --psd_bounce=5 \
     --psd_gradient_steps=2 \
-    --psd_newton_step_Q=2 \
+    --psd_newton_step_Q=3 \
     --psd_cross_validate \
     --psd_cv_n=200 \
     --psd_cv_m=10 \
