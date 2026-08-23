@@ -56,6 +56,11 @@ conda activate psd_general
 #                             Newton-only fit on a small validation subsample, and use the best one
 #   --psd_cv_anchor_trials    number of candidate anchor-node subsamples to try
 #   --psd_cv_anchor_newton_steps  max Newton iterations per anchor-node candidate
+#   --psd_cv_anchor_metric    validation metric for --psd_anchor_cross_validate: rmse (default),
+#                             ed, or ot. ed/ot compare whole rows, so entries already missing
+#                             before extra-hiding are zeroed out in both the imputed and true
+#                             arrays first, so the score only reflects recovery of the
+#                             extra-hidden entries
 #   --psd_verbose_metrics     alongside --verbose, also print MAE/RMSE/OT/ED every 5th bounce
 #                             (mean-imputed against the true training data) -- more expensive,
 #                             opt-in separately from the rest of --verbose's output
@@ -108,7 +113,7 @@ python3 -u main_real_dataset.py \
     --psd_mu=1e-3 \
     --psd_lr_nodes=1e-3 \
     --psd_lr_param=1e-4 \
-    --psd_bounce=50 \
+    --psd_bounce=10 \
     --psd_gradient_steps=2 \
     --psd_newton_step_Q=2 \
     --psd_cross_validate \
@@ -121,6 +126,7 @@ python3 -u main_real_dataset.py \
     --psd_anchor_cross_validate \
     --psd_cv_anchor_trials=5 \
     --psd_cv_anchor_newton_steps=5 \
+    --psd_cv_anchor_metric=rmse \
     --verbose \
     --verbose_newton \
     --psd_verbose_metrics

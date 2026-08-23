@@ -177,6 +177,12 @@ parser.add_argument('--psd_cv_anchor_trials', type=int, default=5,
                          '--psd_anchor_cross_validate')
 parser.add_argument('--psd_cv_anchor_newton_steps', type=int, default=10,
                     help='max Newton iterations per candidate for --psd_anchor_cross_validate')
+parser.add_argument('--psd_cv_anchor_metric', type=str, default='rmse',
+                    choices=['rmse', 'ed', 'ot'],
+                    help='validation metric for --psd_anchor_cross_validate. ed/ot compare whole '
+                         'rows, so the entries already missing before extra-hiding are imputed as '
+                         'zero in both the imputed and true arrays first, so the score reflects '
+                         'only recovery of the extra-hidden entries (see psd_imputer._cv_score)')
 
 args = parser.parse_args()
 
@@ -297,15 +303,16 @@ if __name__ == "__main__":
         if args.psd_anchor_cross_validate:
             logging.info(f"cross-validating psd anchor nodes: {args.psd_cv_anchor_trials} trials, "
                          f"m={args.psd_m}, up to {args.psd_cv_anchor_newton_steps} Newton "
-                         f"iterations each...")
-            cv_anchor_nodes, best_anchor_rmse, _ = cross_validate_anchor_nodes(
+                         f"iterations each, metric={args.psd_cv_anchor_metric}...")
+            cv_anchor_nodes, best_anchor_score, _ = cross_validate_anchor_nodes(
                 ground_truth, args.p, args.psd_m, args.psd_lr_nodes, args.psd_lr_param,
                 args.psd_eta, n_trials=args.psd_cv_anchor_trials, n_cv=args.psd_cv_n,
                 newton_steps=args.psd_cv_anchor_newton_steps,
                 alpha=args.psd_alpha, lbd=args.psd_lbd, mu=args.psd_mu, seed=args.seed + n,
-                verbose=True,
+                verbose=True, cv_metric=args.psd_cv_anchor_metric,
             )
-            logging.info(f"anchor-node cross-validation winner: RMSE={best_anchor_rmse:.4f}")
+            logging.info(f"anchor-node cross-validation winner: "
+                         f"{args.psd_cv_anchor_metric.upper()}={best_anchor_score:.4f}")
 
         ### Each entry from the second axis has a probability p of being NA
 

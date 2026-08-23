@@ -6,10 +6,12 @@ given its observed entries (see marginalize_condition.condition and sampling.mea
 """
 
 import numpy as np
+import ot
 from sklearn.impute import SimpleImputer
 
 from alternating_minimization import alternating_minimization
 from marginalize_condition import condition
+from psd import energy_distance
 from sampling import mean as model_mean, sample_bisection, check_normalized
 
 
@@ -204,9 +206,10 @@ def cross_validate_hyperparams(dataset_loaded, p, lr_nodes_grid, lr_param_grid, 
         (default 20, few for speed)
     :param nbr_gradient_steps, nbr_newton_step_Q, alpha, lbd, mu, seed: see fit_psd_model (lbd/mu
         are divided by n_cv internally, matching the convention used for the full-scale fit)
-    :param verbose: if True, print every candidate's validation RMSE as it's evaluated
+    :param verbose: if True, print every candidate's validation RMSE/ED/OT as it's evaluated
+        (selection is always by RMSE; ED/OT are extra, for visibility only)
     :return: (best_lr_nodes, best_lr_param, best_eta, best_rmse, results) -- results is the full
-        list of (lr_nodes, lr_param, eta, rmse) tuples tried, in evaluation order
+        list of (lr_nodes, lr_param, eta, rmse, ed, ot) tuples tried, in evaluation order
     """
     rng = np.random.default_rng(seed)
     n_total, d = dataset_loaded.shape
@@ -242,27 +245,67 @@ def cross_validate_hyperparams(dataset_loaded, p, lr_nodes_grid, lr_param_grid, 
                     nbr_bounce=nbr_bounce_cv, nbr_gradient_steps=nbr_gradient_steps,
                     nbr_newton_step_Q=nbr_newton_step_Q, seed=seed,
                 )
-                rmse = float(np.sqrt(np.mean((X_imputed[extra_hide] - X_true_cv[extra_hide]) ** 2)))
-                results.append((lr_nodes, lr_param, eta_init, rmse))
+                rmse = _cv_score(X_imputed, X_true_cv, extra_hide, base_mask, 'rmse')
+                ed = _cv_score(X_imputed, X_true_cv, extra_hide, base_mask, 'ed')
+                ot_dist = _cv_score(X_imputed, X_true_cv, extra_hide, base_mask, 'ot')
+                # selection is always by RMSE; ED/OT are computed and printed purely for visibility
+                results.append((lr_nodes, lr_param, eta_init, rmse, ed, ot_dist))
                 if verbose:
                     print(f"  CV: lr_nodes={lr_nodes:.1e}  lr_param={lr_param:.1e}  "
-                          f"eta_init={eta_init:.4f}  RMSE={rmse:.4f}")
+                          f"eta_init={eta_init:.4f}  RMSE={rmse:.4f}  ED={ed:.4f}  OT={ot_dist:.4f}")
 
-    best_lr_nodes, best_lr_param, best_eta, best_rmse = min(results, key=lambda r: r[3])
+    best_lr_nodes, best_lr_param, best_eta, best_rmse, _, _ = min(results, key=lambda r: r[3])
     return best_lr_nodes, best_lr_param, best_eta, best_rmse, results
+
+
+def _cv_score(X_imputed, X_true_cv, extra_hide, base_mask, metric, otlim=5000):
+    """
+    Score a cross-validation candidate: lower is better for every metric option, so callers can
+    always pick with min(..., key=...).
+
+    :param X_imputed, X_true_cv: (n_cv, d) imputed / true validation arrays
+    :param extra_hide: (n_cv, d) boolean, the entries hidden purely for validation scoring
+        (see cross_validate_anchor_nodes/cross_validate_hyperparams) -- what every metric scores
+        recovery of
+    :param base_mask: (n_cv, d) boolean, the entries that were already missing before extra_hide
+        was applied (mirrors the real --p missingness). Only used by 'ed'/'ot': RMSE indexes
+        extra_hide directly, but ED/OT compare whole rows, so base_mask positions are zeroed out in
+        both arrays first -- they're already imputed too, but their reconstruction quality isn't
+        what's being validated here, and leaving them in would let it leak into the score
+    :param metric: 'rmse', 'ed', or 'ot'
+    :return: float score
+    """
+    if metric == 'rmse':
+        return float(np.sqrt(np.mean((X_imputed[extra_hide] - X_true_cv[extra_hide]) ** 2)))
+
+    X_imp_scored = np.where(base_mask, 0.0, X_imputed)
+    X_true_scored = np.where(base_mask, 0.0, X_true_cv)
+
+    if metric == 'ed':
+        return float(energy_distance(X_imp_scored, X_true_scored))
+
+    if metric == 'ot':
+        M = extra_hide.sum(axis=1) > 0
+        n_m = int(M.sum())
+        if n_m == 0 or n_m >= otlim:
+            return float('nan')
+        dists = ((X_imp_scored[M][:, None] - X_true_scored[M]) ** 2).sum(axis=2) / 2.
+        return float(ot.emd2(np.ones(n_m) / n_m, np.ones(n_m) / n_m, dists))
+
+    raise ValueError(f"unknown metric: {metric!r} (expected 'rmse', 'ed', or 'ot')")
 
 
 def cross_validate_anchor_nodes(dataset_loaded, p, m, lr_nodes, lr_param, eta_init, n_trials=5,
                                  n_cv=200, newton_steps=10, alpha=1e-6, lbd=1e-1, mu=1e-3, seed=0,
-                                 verbose=False):
+                                 verbose=False, cv_metric='rmse'):
     """
     Fast cross-validation for the CHOICE of anchor nodes, run after cross_validate_hyperparams (or
     with hand-picked hyperparameters): try n_trials random m-row subsamples of dataset_loaded as
     candidate anchor-node sets, score each by running just the Newton method (nbr_bounce=1, so
     anchor_nodes/precision are never moved -- there's no gradient-step phase with a single bounce)
-    for up to newton_steps iterations on a small validation subsample (same hide-extra-entries /
-    RMSE methodology as cross_validate_hyperparams, drawn once and reused across every candidate so
-    they're compared on the same data), and returns the anchor set with lowest RMSE.
+    for up to newton_steps iterations on a small validation subsample (same hide-extra-entries
+    methodology as cross_validate_hyperparams, drawn once and reused across every candidate so
+    they're compared on the same data), and returns the anchor set with the lowest score.
 
     :param dataset_loaded: (N, d) fully-observed data to draw candidate anchor nodes AND the
         validation subsample from (e.g. the experiment's ground_truth training split)
@@ -277,9 +320,15 @@ def cross_validate_anchor_nodes(dataset_loaded, p, m, lr_nodes, lr_param, eta_in
     :param newton_steps: max Newton iterations per candidate (default 10)
     :param alpha, lbd, mu, seed: see fit_psd_model (lbd/mu divided by n_cv, matching the
         full-scale convention)
-    :param verbose: if True, print every candidate's validation RMSE
-    :return: (best_anchor_nodes, best_rmse, results) -- best_anchor_nodes is (m, d); results is
-        the list of (trial_index, rmse) tuples tried, in order
+    :param verbose: if True, print every candidate's validation RMSE/ED/OT as it's evaluated
+        (all three are always computed and printed, regardless of cv_metric, purely for visibility)
+    :param cv_metric: 'rmse' (default), 'ed', or 'ot' -- which of the three printed scores is
+        actually used to pick the winning candidate; see _cv_score. 'ed'/'ot' compare whole rows,
+        so the entries already missing before extra-hiding (base_mask) are zeroed out in both the
+        imputed and true arrays first, so the score reflects only how well the extra-hidden
+        entries were recovered
+    :return: (best_anchor_nodes, best_score, results) -- best_anchor_nodes is (m, d); results is
+        the list of (trial_index, rmse, ed, ot) tuples tried, in order
     """
     rng = np.random.default_rng(seed)
     n_total, d = dataset_loaded.shape
@@ -306,7 +355,7 @@ def cross_validate_anchor_nodes(dataset_loaded, p, m, lr_nodes, lr_param, eta_in
     X_nas_cv = np.where(combined_mask, np.nan, X_cv)
 
     results = []
-    best_anchor_nodes, best_rmse = None, np.inf
+    best_anchor_nodes, best_score = None, np.inf
 
     for trial in range(n_trials):
         anchor_idx = rng.choice(n_total, size=m, replace=(m > n_total))
@@ -319,14 +368,19 @@ def cross_validate_anchor_nodes(dataset_loaded, p, m, lr_nodes, lr_param, eta_in
             nbr_bounce=1, nbr_gradient_steps=1, nbr_newton_step_Q=newton_steps,
             seed=seed, fixed_anchor_nodes=candidate_anchors,
         )
-        rmse = float(np.sqrt(np.mean((X_imputed[extra_hide] - X_true_cv[extra_hide]) ** 2)))
-        results.append((trial, rmse))
+        rmse = _cv_score(X_imputed, X_true_cv, extra_hide, base_mask, 'rmse')
+        ed = _cv_score(X_imputed, X_true_cv, extra_hide, base_mask, 'ed')
+        ot_dist = _cv_score(X_imputed, X_true_cv, extra_hide, base_mask, 'ot')
+        score = {'rmse': rmse, 'ed': ed, 'ot': ot_dist}[cv_metric]
+        results.append((trial, rmse, ed, ot_dist))
         if verbose:
-            print(f"  Anchor CV trial {trial + 1}/{n_trials}: RMSE={rmse:.4f}")
+            print(f"  Anchor CV trial {trial + 1}/{n_trials}: "
+                  f"RMSE={rmse:.4f}  ED={ed:.4f}  OT={ot_dist:.4f}"
+                  + ("" if cv_metric == 'rmse' else f"  (selecting by {cv_metric.upper()})"))
 
-        if rmse < best_rmse:
-            best_rmse = rmse
+        if score < best_score:
+            best_score = score
             best_anchor_nodes = candidate_anchors
 
-    return best_anchor_nodes, best_rmse, results
+    return best_anchor_nodes, best_score, results
 

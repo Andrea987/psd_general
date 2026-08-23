@@ -35,9 +35,12 @@ def _impute_mean_and_score(dataset, mask, Q, anchor_nodes, precision, dataset_tr
 
     M = mask.sum(axis=1) > 0
     nimp = int(M.sum())
-    diff = X_imputed[M] - dataset_true[M]
-    mae = float(np.mean(np.abs(diff))) if nimp > 0 else float('nan')
-    rmse = float(np.sqrt(np.mean(diff ** 2))) if nimp > 0 else float('nan')
+    # MAE/RMSE: only over the actually-missing entries (mask == True), matching
+    # MissingDataOT_master.utils.MAE/RMSE -- not over every column of a row with some missing
+    # entry, which would dilute the average with exact-zero diffs on the observed columns
+    entry_diff = X_imputed[mask] - dataset_true[mask]
+    mae = float(np.mean(np.abs(entry_diff))) if entry_diff.size > 0 else float('nan')
+    rmse = float(np.sqrt(np.mean(entry_diff ** 2))) if entry_diff.size > 0 else float('nan')
     ed = energy_distance(X_imputed, dataset_true)
 
     ot_dist = None
@@ -151,7 +154,7 @@ def alternating_minimization(info):
             grad_W_norm = np.linalg.norm(grad_W)
             grad_eta_norm = np.linalg.norm(grad_eta)
 
-        if verbose and step % 5 == 0:
+        if verbose and (step % 5 == 0 or step == nbr_bounce - 1):
             msg = f"Bounce {step + 1}/{nbr_bounce}\tNewton decrement: {newton_decrement:.6f}"
             if grad_W_norm is not None:
                 msg += (f"\t|grad anchor_nodes|: {grad_W_norm:.6f}\t"
