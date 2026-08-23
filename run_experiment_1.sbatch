@@ -125,12 +125,12 @@ python3 -u main_real_dataset.py \
     --psd_cv_bounce=20 \
     --psd_cv_lr_nodes_grid=1e-4,1e-3,1e-2 \
     --psd_cv_lr_param_grid=1e-5,1e-4,1e-3 \
-    --psd_cv_eta_grid=-1.2,-1.0,-0.8,-0.6,-0.4,-0.2,0.0,0.2,0.4,0.6,0.8,1.0,1.2 \
-    --psd_cv_metric=rmse \
+    --psd_cv_eta_grid=-1.2,-1.1,-1.0,-0.9,-0.8,-0.7,-0.6,-0.5,-0.4,-0.3,-0.2,-0.1,0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,1.1,1.2 \
+    --psd_cv_metric=ed \
     --psd_anchor_cross_validate \
     --psd_cv_anchor_trials=10 \
     --psd_cv_anchor_newton_steps=5 \
-    --psd_cv_anchor_metric=rmse \
+    --psd_cv_anchor_metric=ed \
     --verbose \
     --verbose_newton \
     --psd_verbose_metrics
