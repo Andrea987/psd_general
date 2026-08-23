@@ -85,7 +85,6 @@ python3 -u main_real_dataset.py \
     --max_train_obs=700 \
     --sinkhorn_niter=3000 \
     --psd_m=200 \
-    --psd_anchor_init=uniform_hypercube \
     --psd_eta=1.6 \
     --psd_eta_init_mode=empirical \
     --psd_alpha=1e-6 \
@@ -95,7 +94,7 @@ python3 -u main_real_dataset.py \
     --psd_lr_param=1e-4 \
     --psd_bounce=1 \
     --psd_gradient_steps=3 \
-    --psd_newton_step_Q=3 \
+    --psd_newton_step_Q=10 \
     --verbose \
     --verbose_newton
 
