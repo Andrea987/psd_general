@@ -115,6 +115,7 @@ def alternating_minimization(info):
             if grad_W_norm is not None:
                 msg += (f"\t|grad anchor_nodes|: {grad_W_norm:.6f}\t"
                         f"|grad precision|: {grad_eta_norm:.6f}")
+            msg += f"\tprecision: {np.array2string(info['precision'], precision=4)}"
             print(msg)
 
     return info['Q'], info['anchor_nodes'], info['precision'], history

@@ -165,3 +165,77 @@ def psd_impute(X_nas, mask, m=50, eta_init=2.0, alpha=1e-6, lbd=1e-4, mu=1e-4,
 
     return X_imputed, history, multiple_imp
 
+
+def cross_validate_hyperparams(dataset_loaded, p, lr_nodes_grid, lr_param_grid, eta_grid,
+                                m_cv=10, n_cv=200, nbr_bounce_cv=20, nbr_gradient_steps=5,
+                                nbr_newton_step_Q=20, alpha=1e-6, lbd=1e-1, mu=1e-3, seed=0,
+                                verbose=False):
+    """
+    Fast cross-validation for (l_rate_nodes, l_rate_param, eta_init): fit small, quick psd models
+    on a small validation subsample and score each candidate by how well it recovers ADDITIONALLY
+    hidden entries -- not the ones already missing -- via RMSE.
+
+    Procedure: draw an n_cv-row subsample of dataset_loaded, apply the usual MCAR mask at
+    probability p (the "already missing" entries), then hide an extra MCAR fraction (also at
+    probability p) of what's left observed. Only that second, extra mask is scored: for each
+    candidate, fit with m_cv anchor nodes / nbr_bounce_cv bounces (small and few, for speed) and
+    compute RMSE between the imputed and true values at the extra-hidden positions.
+
+    :param dataset_loaded: (N, d) full dataset to subsample from
+    :param p: MCAR probability, used both for the base mask and the additional validation mask
+        (same convention as the main experiment's --p)
+    :param lr_nodes_grid, lr_param_grid, eta_grid: lists of candidate l_rate_nodes, l_rate_param,
+        eta_init (LOG-precision, see fit_psd_model) values; every combination is tried
+    :param m_cv: number of anchor nodes for the validation fits (default 10, small for speed)
+    :param n_cv: validation subsample size (default 200, small for speed)
+    :param nbr_bounce_cv: number of alternating_minimization bounces for the validation fits
+        (default 20, few for speed)
+    :param nbr_gradient_steps, nbr_newton_step_Q, alpha, lbd, mu, seed: see fit_psd_model (lbd/mu
+        are divided by n_cv internally, matching the convention used for the full-scale fit)
+    :param verbose: if True, print every candidate's validation RMSE as it's evaluated
+    :return: (best_lr_nodes, best_lr_param, best_eta, best_rmse, results) -- results is the full
+        list of (lr_nodes, lr_param, eta, rmse) tuples tried, in evaluation order
+    """
+    rng = np.random.default_rng(seed)
+    n_total, d = dataset_loaded.shape
+    n_cv = min(n_cv, n_total)
+    idx = rng.choice(n_total, size=n_cv, replace=False)
+    X_cv = dataset_loaded[idx]
+
+    base_mask = rng.random((n_cv, d)) < p
+    fully_missing = np.where(base_mask.sum(axis=1) == d)[0]
+    if len(fully_missing) > 0:
+        revealed = rng.integers(0, d, size=len(fully_missing))
+        base_mask[fully_missing, revealed] = False
+
+    # additionally hide some of what's still observed -- these are the entries we score against
+    observed = ~base_mask
+    extra_hide = (rng.random((n_cv, d)) < p) & observed
+    # never extra-hide the last observed entry of a row (would leave nothing to condition on)
+    would_be_fully_missing = np.where((base_mask | extra_hide).sum(axis=1) == d)[0]
+    extra_hide[would_be_fully_missing] = False
+
+    combined_mask = base_mask | extra_hide
+    X_true_cv = X_cv.copy()
+    X_nas_cv = np.where(combined_mask, np.nan, X_cv)
+
+    results = []
+    for lr_nodes in lr_nodes_grid:
+        for lr_param in lr_param_grid:
+            for eta_init in eta_grid:
+                X_imputed, _, _ = psd_impute(
+                    X_nas_cv, combined_mask,
+                    m=m_cv, eta_init=eta_init, alpha=alpha, lbd=lbd / n_cv, mu=mu / n_cv,
+                    l_rate_nodes=lr_nodes, l_rate_param=lr_param,
+                    nbr_bounce=nbr_bounce_cv, nbr_gradient_steps=nbr_gradient_steps,
+                    nbr_newton_step_Q=nbr_newton_step_Q, seed=seed,
+                )
+                rmse = float(np.sqrt(np.mean((X_imputed[extra_hide] - X_true_cv[extra_hide]) ** 2)))
+                results.append((lr_nodes, lr_param, eta_init, rmse))
+                if verbose:
+                    print(f"  CV: lr_nodes={lr_nodes:.1e}  lr_param={lr_param:.1e}  "
+                          f"eta_init={eta_init:.4f}  RMSE={rmse:.4f}")
+
+    best_lr_nodes, best_lr_param, best_eta, best_rmse = min(results, key=lambda r: r[3])
+    return best_lr_nodes, best_lr_param, best_eta, best_rmse, results
+
