@@ -163,6 +163,10 @@ parser.add_argument('--psd_cv_lr_nodes_grid', type=str, default='1e-4,1e-3,1e-2'
 parser.add_argument('--psd_cv_lr_param_grid', type=str, default='1e-5,1e-4,1e-3')
 parser.add_argument('--psd_cv_eta_grid', type=str, default='0.0,0.693147,1.609438',
                     help='comma-separated candidate LOG-precision starting points for --psd_eta')
+parser.add_argument('--psd_cv_metric', type=str, default='rmse', choices=['rmse', 'ed', 'ot'],
+                    help='validation metric for --psd_cross_validate. RMSE/ED/OT are always all '
+                         'computed and printed for every candidate; this only picks which one is '
+                         'used to choose the winning combination')
 
 # fast cross-validation of the anchor nodes themselves, run after the hyperparameter CV above
 # (see psd_imputer.cross_validate_anchor_nodes)
@@ -283,17 +287,18 @@ if __name__ == "__main__":
             logging.info(f"cross-validating psd_lr_nodes/psd_lr_param/psd_eta on a "
                          f"{min(args.psd_cv_n, ground_truth.shape[0])}-observation, "
                          f"{args.psd_cv_m}-anchor-node validation subsample "
-                         f"({len(lr_nodes_grid) * len(lr_param_grid) * len(eta_grid)} combinations)...")
-            best_lr_nodes, best_lr_param, best_eta, best_rmse, _ = cross_validate_hyperparams(
+                         f"({len(lr_nodes_grid) * len(lr_param_grid) * len(eta_grid)} combinations, "
+                         f"metric={args.psd_cv_metric})...")
+            best_lr_nodes, best_lr_param, best_eta, best_score, _ = cross_validate_hyperparams(
                 ground_truth, args.p, lr_nodes_grid, lr_param_grid, eta_grid,
                 m_cv=args.psd_cv_m, n_cv=args.psd_cv_n, nbr_bounce_cv=args.psd_cv_bounce,
                 nbr_gradient_steps=args.psd_gradient_steps, nbr_newton_step_Q=args.psd_newton_step_Q,
                 alpha=args.psd_alpha, lbd=args.psd_lbd, mu=args.psd_mu, seed=args.seed + n,
-                verbose=True,
+                verbose=True, cv_metric=args.psd_cv_metric,
             )
             logging.info(f"cross-validation winner: psd_lr_nodes={best_lr_nodes:.1e}  "
                          f"psd_lr_param={best_lr_param:.1e}  psd_eta={best_eta:.4f}  "
-                         f"(validation RMSE={best_rmse:.4f})")
+                         f"(validation {args.psd_cv_metric.upper()}={best_score:.4f})")
             args.psd_lr_nodes = best_lr_nodes
             args.psd_lr_param = best_lr_param
             args.psd_eta = best_eta

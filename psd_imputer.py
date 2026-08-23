@@ -183,17 +183,18 @@ def psd_impute(X_nas, mask, m=50, eta_init=2.0, alpha=1e-6, lbd=1e-4, mu=1e-4,
 def cross_validate_hyperparams(dataset_loaded, p, lr_nodes_grid, lr_param_grid, eta_grid,
                                 m_cv=10, n_cv=200, nbr_bounce_cv=20, nbr_gradient_steps=5,
                                 nbr_newton_step_Q=20, alpha=1e-6, lbd=1e-1, mu=1e-3, seed=0,
-                                verbose=False):
+                                verbose=False, cv_metric='rmse'):
     """
     Fast cross-validation for (l_rate_nodes, l_rate_param, eta_init): fit small, quick psd models
     on a small validation subsample and score each candidate by how well it recovers ADDITIONALLY
-    hidden entries -- not the ones already missing -- via RMSE.
+    hidden entries -- not the ones already missing -- via RMSE, ED, or OT (see cv_metric).
 
     Procedure: draw an n_cv-row subsample of dataset_loaded, apply the usual MCAR mask at
     probability p (the "already missing" entries), then hide an extra MCAR fraction (also at
     probability p) of what's left observed. Only that second, extra mask is scored: for each
     candidate, fit with m_cv anchor nodes / nbr_bounce_cv bounces (small and few, for speed) and
-    compute RMSE between the imputed and true values at the extra-hidden positions.
+    compute RMSE/ED/OT between the imputed and true values at the extra-hidden positions (see
+    _cv_score).
 
     :param dataset_loaded: (N, d) full dataset to subsample from
     :param p: MCAR probability, used both for the base mask and the additional validation mask
@@ -207,10 +208,17 @@ def cross_validate_hyperparams(dataset_loaded, p, lr_nodes_grid, lr_param_grid, 
     :param nbr_gradient_steps, nbr_newton_step_Q, alpha, lbd, mu, seed: see fit_psd_model (lbd/mu
         are divided by n_cv internally, matching the convention used for the full-scale fit)
     :param verbose: if True, print every candidate's validation RMSE/ED/OT as it's evaluated
-        (selection is always by RMSE; ED/OT are extra, for visibility only)
-    :return: (best_lr_nodes, best_lr_param, best_eta, best_rmse, results) -- results is the full
-        list of (lr_nodes, lr_param, eta, rmse, ed, ot) tuples tried, in evaluation order
+        (all three are always computed and printed, regardless of cv_metric, purely for visibility)
+    :param cv_metric: 'rmse' (default), 'ed', or 'ot' -- which of the three printed scores is
+        actually used to pick the winning combination; see _cv_score. 'ed'/'ot' compare whole
+        rows, so the entries already missing before extra-hiding (base_mask) are zeroed out in
+        both the imputed and true arrays first, so the score reflects only how well the
+        extra-hidden entries were recovered
+    :return: (best_lr_nodes, best_lr_param, best_eta, best_score, results) -- best_score is
+        whichever of rmse/ed/ot cv_metric selected on; results is the full list of
+        (lr_nodes, lr_param, eta, rmse, ed, ot) tuples tried, in evaluation order
     """
+    metric_idx = {'rmse': 3, 'ed': 4, 'ot': 5}[cv_metric]
     rng = np.random.default_rng(seed)
     n_total, d = dataset_loaded.shape
     n_cv = min(n_cv, n_total)
@@ -248,14 +256,15 @@ def cross_validate_hyperparams(dataset_loaded, p, lr_nodes_grid, lr_param_grid, 
                 rmse = _cv_score(X_imputed, X_true_cv, extra_hide, base_mask, 'rmse')
                 ed = _cv_score(X_imputed, X_true_cv, extra_hide, base_mask, 'ed')
                 ot_dist = _cv_score(X_imputed, X_true_cv, extra_hide, base_mask, 'ot')
-                # selection is always by RMSE; ED/OT are computed and printed purely for visibility
                 results.append((lr_nodes, lr_param, eta_init, rmse, ed, ot_dist))
                 if verbose:
                     print(f"  CV: lr_nodes={lr_nodes:.1e}  lr_param={lr_param:.1e}  "
-                          f"eta_init={eta_init:.4f}  RMSE={rmse:.4f}  ED={ed:.4f}  OT={ot_dist:.4f}")
+                          f"eta_init={eta_init:.4f}  RMSE={rmse:.4f}  ED={ed:.4f}  OT={ot_dist:.4f}"
+                          + ("" if cv_metric == 'rmse' else f"  (selecting by {cv_metric.upper()})"))
 
-    best_lr_nodes, best_lr_param, best_eta, best_rmse, _, _ = min(results, key=lambda r: r[3])
-    return best_lr_nodes, best_lr_param, best_eta, best_rmse, results
+    best = min(results, key=lambda r: r[metric_idx])
+    best_lr_nodes, best_lr_param, best_eta, best_score = best[0], best[1], best[2], best[metric_idx]
+    return best_lr_nodes, best_lr_param, best_eta, best_score, results
 
 
 def _cv_score(X_imputed, X_true_cv, extra_hide, base_mask, metric, otlim=5000):
