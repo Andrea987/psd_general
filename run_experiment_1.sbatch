@@ -109,7 +109,7 @@ python3 -u main_real_dataset.py \
     --psd_cv_bounce=20 \
     --psd_cv_lr_nodes_grid=1e-4,1e-3,1e-2 \
     --psd_cv_lr_param_grid=1e-5,1e-4,1e-3 \
-    --psd_cv_eta_grid=0.0,0.693147,1.609438 \
+    --psd_cv_eta_grid=-1.2,-0.8,-0.4,0.0,0.4,0.8,1.2 \
     --verbose \
     --verbose_newton
 
