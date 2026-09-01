@@ -15,6 +15,60 @@ from psd import energy_distance
 from sampling import mean as model_mean, sample_bisection, check_normalized
 
 
+def reveal_random_entry_if_fully_missing(mask, rng):
+    """
+    Guarantee no row of mask is fully missing: for any row where every entry is True (missing),
+    reveal (set to False) one randomly-chosen entry in that row. A fully-missing row has nothing
+    to condition on -- conditioning falls back to the model's unconditional marginal for that row,
+    which is a real, unwanted edge case (a real dataset row, or a cross-validation validation row,
+    contributing no genuine information) rather than an error, so it is silently possible unless
+    explicitly excluded here.
+
+    :param mask: (n, d) boolean array, True = missing. Modified in place.
+    :param rng: numpy Generator used to pick which entry to reveal
+    :return: mask, for chaining
+    """
+    d = mask.shape[1]
+    fully_missing = np.where(mask.sum(axis=1) == d)[0]
+    if len(fully_missing) > 0:
+        revealed = rng.integers(0, d, size=len(fully_missing))
+        mask[fully_missing, revealed] = False
+    return mask
+
+
+def hide_at_least_one_entry_if_none_hidden(extra_hide, observed, rng):
+    """
+    Guarantee cross-validation always has at least one entry to actually validate against: if the
+    random extra_hide draw came up empty everywhere (possible with a small n_cv and/or small p --
+    every per-entry MCAR(p) draw simply missed), force one randomly-chosen currently-observed
+    entry to be hidden instead of silently leaving nothing to score. Without this, every scoring
+    metric ends up computed over zero entries (RMSE: nan from an empty mean; OT: nan by
+    _cv_score's own n_m == 0 guard), and since Python's min() with an all-nan key silently returns
+    whichever candidate was tried first rather than comparing anything, cross-validation would
+    appear to pick a "winner" that was never actually validated at all.
+
+    Only ever picks from a row that has MORE THAN ONE observed entry, so the forced hide can never
+    itself create a fully-missing row -- same rule already applied to the random extra_hide draw
+    itself (see the would_be_fully_missing correction next to every call site). If literally every
+    row has at most one observed entry, there is truly nothing safe to hide (any pick would leave
+    some row fully missing), and extra_hide is left as-is.
+
+    :param extra_hide: (n, d) boolean array, True = hidden for validation. Modified in place.
+    :param observed: (n, d) boolean array, True = currently observed (not already missing) --
+        the pool this can pick from
+    :param rng: numpy Generator used to pick which entry to hide
+    :return: extra_hide, for chaining
+    """
+    if not extra_hide.any():
+        rows_with_spare_observed = np.where(observed.sum(axis=1) > 1)[0]
+        if len(rows_with_spare_observed) > 0:
+            row = rows_with_spare_observed[rng.integers(len(rows_with_spare_observed))]
+            observed_cols = np.where(observed[row])[0]
+            col = observed_cols[rng.integers(len(observed_cols))]
+            extra_hide[row, col] = True
+    return extra_hide
+
+
 def fit_psd_model(dataset, masks, m, eta_init, alpha, lbd, mu, l_rate_nodes, l_rate_param,
                    nbr_bounce, nbr_gradient_steps, nbr_newton_step_Q, seed=0, verbose=False,
                    verbose_newton=False, anchor_init='data_subset', eta_init_mode='fixed',
@@ -181,25 +235,38 @@ def psd_impute(X_nas, mask, m=50, eta_init=2.0, alpha=1e-6, lbd=1e-4, mu=1e-4,
     return X_imputed, history, multiple_imp
 
 
-def cross_validate_hyperparams(dataset_loaded, p, lr_nodes_grid, lr_param_grid, eta_grid,
-                                m_cv=10, n_cv=200, nbr_bounce_cv=20, nbr_gradient_steps=5,
-                                nbr_newton_step_Q=20, alpha=1e-6, lbd=1e-1, mu=1e-3, seed=0,
-                                verbose=False, cv_metric='rmse'):
+def cross_validate_hyperparams(X_train_filled_with_NaN, mask_train, p, lr_nodes_grid,
+                                lr_param_grid, eta_grid, m_cv=10, n_cv=200, nbr_bounce_cv=20,
+                                nbr_gradient_steps=5, nbr_newton_step_Q=20, alpha=1e-6, lbd=1e-1,
+                                mu=1e-3, seed=0, verbose=False, cv_metric='rmse'):
     """
     Fast cross-validation for (l_rate_nodes, l_rate_param, eta_init): fit small, quick psd models
     on a small validation subsample and score each candidate by how well it recovers ADDITIONALLY
     hidden entries -- not the ones already missing -- via RMSE, ED, or OT (see cv_metric).
 
-    Procedure: draw an n_cv-row subsample of dataset_loaded, apply the usual MCAR mask at
-    probability p (the "already missing" entries), then hide an extra MCAR fraction (also at
-    probability p) of what's left observed. Only that second, extra mask is scored: for each
-    candidate, fit with m_cv anchor nodes / nbr_bounce_cv bounces (small and few, for speed) and
-    compute RMSE/ED/OT between the imputed and true values at the extra-hidden positions (see
-    _cv_score).
+    (X_train_filled_with_NaN, mask_train) is the ONLY data source anywhere in this function --
+    same principle as cross_validate_anchor_nodes (see its docstring): the validation subsample
+    and its base_mask are drawn directly from the REAL, already-missing training data -- not a
+    freshly synthesized MCAR mask over a separate fully-observed array. This matters beyond just
+    avoiding leaks: a freshly-synthesized mask is always plain MCAR, so if the real experiment
+    uses --MAR/--MNAR_log/--MNAR_quant, hyperparameters tuned against a from-scratch MCAR mask
+    would be tuned against a missingness pattern that doesn't match what the real fit actually
+    faces. Reusing (X_train_filled_with_NaN, mask_train) removes that mismatch too.
 
-    :param dataset_loaded: (N, d) full dataset to subsample from
-    :param p: MCAR probability, used both for the base mask and the additional validation mask
-        (same convention as the main experiment's --p)
+    Procedure: draw an n_cv-row subsample of (X_train_filled_with_NaN, mask_train), then
+    additionally hide an extra MCAR fraction (at probability p) of what's already observed in that
+    subsample. Only that second, extra mask is scored: for each candidate, fit with m_cv anchor
+    nodes / nbr_bounce_cv bounces (small and few, for speed) and compute RMSE/ED/OT between the
+    imputed and true values at the extra-hidden positions (see _cv_score) -- the "true" value is
+    simply what X_train_filled_with_NaN already held there before the extra hide, exactly as in
+    cross_validate_anchor_nodes.
+
+    :param X_train_filled_with_NaN: (n_train, d) the REAL training data, NaN at the entries
+        mask_train marks missing -- typically main_real_dataset.py's data_nas
+    :param mask_train: (n_train, d) boolean (or 0/1), True/1 = missing -- typically
+        main_real_dataset.py's mask
+    :param p: MCAR probability for the additional validation-only hide (extra_hide), same
+        convention as the main experiment's --p
     :param lr_nodes_grid, lr_param_grid, eta_grid: lists of candidate l_rate_nodes, l_rate_param,
         eta_init (LOG-precision, see fit_psd_model) values; every combination is tried
     :param m_cv: number of anchor nodes for the validation fits (default 10, small for speed)
@@ -221,16 +288,19 @@ def cross_validate_hyperparams(dataset_loaded, p, lr_nodes_grid, lr_param_grid, 
     """
     metric_idx = {'rmse': 3, 'ed': 4, 'ot': 5}[cv_metric]
     rng = np.random.default_rng(seed)
-    n_total, d = dataset_loaded.shape
-    n_cv = min(n_cv, n_total)
-    idx = rng.choice(n_total, size=n_cv, replace=False)
-    X_cv = dataset_loaded[idx]
+    mask_train = np.asarray(mask_train, dtype=bool)
+    n_train, d = X_train_filled_with_NaN.shape
+    n_cv = min(n_cv, n_train)
 
-    base_mask = rng.random((n_cv, d)) < p
-    fully_missing = np.where(base_mask.sum(axis=1) == d)[0]
-    if len(fully_missing) > 0:
-        revealed = rng.integers(0, d, size=len(fully_missing))
-        base_mask[fully_missing, revealed] = False
+    val_idx = rng.choice(n_train, size=n_cv, replace=False)
+    X_cv = X_train_filled_with_NaN[val_idx]  # already NaN at mask_train positions
+    base_mask = mask_train[val_idx]
+    # see cross_validate_anchor_nodes: a fully-missing row can't be fixed here (no real value left
+    # to reveal) -- must be prevented where mask_train is built (main_real_dataset.py)
+    assert not (base_mask.sum(axis=1) == d).any(), (
+        "mask_train has at least one fully-missing row in the validation subsample -- fix this "
+        "where mask_train is constructed (see reveal_random_entry_if_fully_missing), not here"
+    )
 
     # additionally hide some of what's still observed -- these are the entries we score against
     observed = ~base_mask
@@ -238,9 +308,19 @@ def cross_validate_hyperparams(dataset_loaded, p, lr_nodes_grid, lr_param_grid, 
     # never extra-hide the last observed entry of a row (would leave nothing to condition on)
     would_be_fully_missing = np.where((base_mask | extra_hide).sum(axis=1) == d)[0]
     extra_hide[would_be_fully_missing] = False
+    # guarantee there is always at least one entry to actually validate against (see
+    # hide_at_least_one_entry_if_none_hidden)
+    hide_at_least_one_entry_if_none_hidden(extra_hide, observed, rng)
+
+    # the "true" value at every extra_hide position is simply what X_cv already holds there --
+    # captured BEFORE additionally hiding it below (see cross_validate_anchor_nodes)
+    X_true_cv = X_cv.copy()
 
     combined_mask = base_mask | extra_hide
-    X_true_cv = X_cv.copy()
+    assert np.array_equal(combined_mask | base_mask, combined_mask), (
+        "combined_mask must be a superset of base_mask -- an entry already missing beforehand "
+        "must never come back as observed"
+    )
     X_nas_cv = np.where(combined_mask, np.nan, X_cv)
 
     if verbose:
@@ -323,22 +403,45 @@ def _cv_score(X_imputed, X_true_cv, extra_hide, base_mask, metric, otlim=5000):
     raise ValueError(f"unknown metric: {metric!r} (expected 'rmse', 'ed', or 'ot')")
 
 
-def cross_validate_anchor_nodes(dataset_loaded, p, m, lr_nodes, lr_param, eta_init, n_trials=5,
-                                 n_cv=200, newton_steps=10, alpha=1e-6, lbd=1e-1, mu=1e-3, seed=0,
-                                 verbose=False, cv_metric='rmse'):
+def cross_validate_anchor_nodes(X_train_filled_with_NaN, mask_train, p, m, lr_nodes, lr_param,
+                                 eta_init, n_trials=5, n_cv=200, newton_steps=10, alpha=1e-6,
+                                 lbd=1e-1, mu=1e-3, seed=0, verbose=False, cv_metric='rmse'):
     """
     Fast cross-validation for the CHOICE of anchor nodes, run after cross_validate_hyperparams (or
-    with hand-picked hyperparameters): try n_trials random m-row subsamples of dataset_loaded as
-    candidate anchor-node sets, score each by running just the Newton method (nbr_bounce=1, so
+    with hand-picked hyperparameters): try n_trials random m-row subsamples as candidate
+    anchor-node sets, score each by running just the Newton method (nbr_bounce=1, so
     anchor_nodes/precision are never moved -- there's no gradient-step phase with a single bounce)
     for up to newton_steps iterations on a small validation subsample (same hide-extra-entries
     methodology as cross_validate_hyperparams, drawn once and reused across every candidate so
     they're compared on the same data), and returns the anchor set with the lowest score.
 
-    :param dataset_loaded: (N, d) fully-observed data to draw candidate anchor nodes AND the
-        validation subsample from (e.g. the experiment's ground_truth training split)
-    :param p: MCAR probability, used both for the base mask and the additional validation mask
-        (same convention as the main experiment's --p)
+    (X_train_filled_with_NaN, mask_train) is the ONLY data source anywhere in this function --
+    there is no separate ground-truth array. Two things are ever built from it:
+      1. Candidate anchors: mean-imputed from the WHOLE (X_train_filled_with_NaN, mask_train),
+         exactly like fit_psd_model's own anchor_init='data_subset'. A mean-imputed value carries
+         no information beyond what's already visible, so a candidate can never encode a hidden
+         entry's true value, regardless of which rows end up chosen.
+      2. Validation scoring (extra_hide): the entries hidden for scoring are always a SUBSET of
+         what's already observed in X_train_filled_with_NaN (mask_train == False) for that row --
+         so their "true" value is simply whatever X_train_filled_with_NaN already holds there,
+         captured before additionally hiding it. Nothing outside X_train_filled_with_NaN is ever
+         consulted.
+    Since both candidates and scoring draw from the exact same single array, and validation
+    entries are only ever chosen from what's already legitimately visible, there is no channel
+    through which a hidden value could reach either the fit or the score.
+
+    (An earlier version of this function drew candidates straight from a separate, fully-observed
+    ground_truth array, which meant a candidate could coincide with a training row and leak that
+    row's true value into its own imputation -- verified empirically: a row's error collapsed
+    4-130x when its true vector was planted as an anchor. That data source is removed entirely
+    here, not just guarded against.)
+
+    :param X_train_filled_with_NaN: (n_train, d) the REAL training data, NaN at the entries
+        mask_train marks missing -- typically main_real_dataset.py's data_nas
+    :param mask_train: (n_train, d) boolean (or 0/1), True/1 = missing -- typically
+        main_real_dataset.py's mask
+    :param p: MCAR probability for the additional validation-only hide (extra_hide), same
+        convention as the main experiment's --p
     :param m: number of anchor nodes -- should match the m used for the real run
     :param lr_nodes, lr_param, eta_init: the hyperparameters already chosen (e.g. by
         cross_validate_hyperparams); held fixed throughout this stage since bounce=1 means they're
@@ -352,34 +455,55 @@ def cross_validate_anchor_nodes(dataset_loaded, p, m, lr_nodes, lr_param, eta_in
         (all three are always computed and printed, regardless of cv_metric, purely for visibility)
     :param cv_metric: 'rmse' (default), 'ed', or 'ot' -- which of the three printed scores is
         actually used to pick the winning candidate; see _cv_score. 'ed'/'ot' compare whole rows,
-        so the entries already missing before extra-hiding (base_mask) are zeroed out in both the
+        so the entries already missing before extra-hiding (mask_train) are zeroed out in both the
         imputed and true arrays first, so the score reflects only how well the extra-hidden
         entries were recovered
-    :return: (best_anchor_nodes, best_score, results) -- best_anchor_nodes is (m, d); results is
-        the list of (trial_index, rmse, ed, ot) tuples tried, in order
+    :return: (best_anchor_nodes, best_score, results) -- best_anchor_nodes is (m, d), ready to use
+        directly as fixed_anchor_nodes for the real fit on (X_train_filled_with_NaN, mask_train);
+        results is the list of (trial_index, rmse, ed, ot) tuples tried, in order
     """
     rng = np.random.default_rng(seed)
-    n_total, d = dataset_loaded.shape
-    n_cv = min(n_cv, n_total)
+    mask_train = np.asarray(mask_train, dtype=bool)
+    n_train, d = X_train_filled_with_NaN.shape
+    n_cv = min(n_cv, n_train)
+
+    # candidate anchors: mean-imputed from the WHOLE (X_train_filled_with_NaN, mask_train) -- the
+    # only source used to build them, mirroring fit_psd_model's own anchor_init='data_subset'
+    dataset_nan_full = np.where(mask_train, np.nan, X_train_filled_with_NaN)
+    initial_imputed_full = SimpleImputer(strategy='mean').fit_transform(dataset_nan_full)
 
     # validation subsample + extra-hiding, drawn once and reused for every candidate anchor set
-    # (same construction as cross_validate_hyperparams)
-    val_idx = rng.choice(n_total, size=n_cv, replace=False)
-    X_cv = dataset_loaded[val_idx]
-
-    base_mask = rng.random((n_cv, d)) < p
-    fully_missing = np.where(base_mask.sum(axis=1) == d)[0]
-    if len(fully_missing) > 0:
-        revealed = rng.integers(0, d, size=len(fully_missing))
-        base_mask[fully_missing, revealed] = False
+    val_idx = rng.choice(n_train, size=n_cv, replace=False)
+    X_cv = X_train_filled_with_NaN[val_idx]  # already NaN at mask_train positions
+    base_mask = mask_train[val_idx]
+    # a fully-missing row can't be fixed here -- there is no real value left in
+    # X_train_filled_with_NaN to reveal, it's already NaN. This must be prevented where mask_train
+    # is actually created, before any value is discarded (see main_real_dataset.py, which reveals
+    # one entry per fully-missing row right after building the real mask). Fail loudly instead of
+    # silently mishandling it if that invariant was ever violated.
+    assert not (base_mask.sum(axis=1) == d).any(), (
+        "mask_train has at least one fully-missing row in the validation subsample -- fix this "
+        "where mask_train is constructed (see reveal_random_entry_if_fully_missing), not here"
+    )
 
     observed = ~base_mask
     extra_hide = (rng.random((n_cv, d)) < p) & observed
     would_be_fully_missing = np.where((base_mask | extra_hide).sum(axis=1) == d)[0]
     extra_hide[would_be_fully_missing] = False
+    # guarantee there is always at least one entry to actually validate against (see
+    # hide_at_least_one_entry_if_none_hidden)
+    hide_at_least_one_entry_if_none_hidden(extra_hide, observed, rng)
+
+    # the "true" value at every extra_hide position is simply what X_cv already holds there (it's
+    # observed -- not NaN -- since extra_hide is a subset of ~base_mask); capture it BEFORE
+    # additionally hiding it below. Still no array other than X_train_filled_with_NaN is ever touched.
+    X_true_cv = X_cv.copy()
 
     combined_mask = base_mask | extra_hide
-    X_true_cv = X_cv.copy()
+    assert np.array_equal(combined_mask | base_mask, combined_mask), (
+        "combined_mask must be a superset of base_mask -- an entry already missing beforehand "
+        "must never come back as observed"
+    )
     X_nas_cv = np.where(combined_mask, np.nan, X_cv)
 
     if verbose:
@@ -389,8 +513,8 @@ def cross_validate_anchor_nodes(dataset_loaded, p, m, lr_nodes, lr_param, eta_in
     best_anchor_nodes, best_score = None, np.inf
 
     for trial in range(n_trials):
-        anchor_idx = rng.choice(n_total, size=m, replace=(m > n_total))
-        candidate_anchors = dataset_loaded[anchor_idx].copy()
+        anchor_idx = rng.choice(n_train, size=m, replace=(m > n_train))
+        candidate_anchors = initial_imputed_full[anchor_idx].copy()
 
         X_imputed, _, _ = psd_impute(
             X_nas_cv, combined_mask,

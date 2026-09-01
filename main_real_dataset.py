@@ -31,7 +31,8 @@ from MissingDataOT_master.softimpute import softimpute, cv_softimpute
 from MissingDataOT_master.data_loaders import dataset_loader
 from MissingDataOT_master.imputers import OTimputer, RRimputer
 
-from psd_imputer import psd_impute, cross_validate_hyperparams, cross_validate_anchor_nodes
+from psd_imputer import (psd_impute, cross_validate_hyperparams, cross_validate_anchor_nodes,
+                          reveal_random_entry_if_fully_missing)
 from psd import energy_distance
 
 import argparse
@@ -310,6 +311,55 @@ if __name__ == "__main__":
                      f"test split: {test_split:.2%}\t"
                      f"train missingness (p): {p:.2%}")
 
+        ### Each entry from the second axis has a probability p of being NA -- this is the REAL
+        # (X_train, M_train) for this repetition, built before any CV so that anchor-node CV can
+        # use it directly instead of reconstructing its own separate masking of ground_truth
+
+        if args.MAR:
+            logging.info("MAR")
+            mask = MAR_mask(X_true, p, args.p_obs).double()
+        elif args.MNAR_log:
+            logging.info("Logistic MNAR")
+            mask = MNAR_mask_logistic(X_true, p, args.p_obs).double()
+        elif args.MNAR_quant:
+            logging.info("Quantile MNAR")
+            mask = MNAR_mask_quantiles(X_true, p, args.q_mnar, 1-args.p_obs,
+                                       cut='both', MCAR=False).double()
+        else:  # MCAR
+            mask = (torch.rand(ground_truth.shape) < p).double()
+
+        # guarantee no row is fully missing (no entries left to condition on) -- whichever mode
+        # built mask above, this reveals one random entry per fully-missing row. Fixed here, once,
+        # at the source: X_nas below is built from this corrected mask, and cross_validate_
+        # anchor_nodes reuses this exact mask as its own base_mask, so both inherit the guarantee
+        mask_bool_np = mask.bool().numpy()
+        n_fully_missing = (mask_bool_np.sum(axis=1) == mask_bool_np.shape[1]).sum()
+        reveal_random_entry_if_fully_missing(mask_bool_np, np.random.default_rng(args.seed + n))
+        if n_fully_missing > 0:
+            logging.info(f"revealed one entry in {n_fully_missing} row(s) that would otherwise "
+                         f"have been fully missing")
+            mask = torch.tensor(mask_bool_np, dtype=mask.dtype)
+
+        X_nas = X_true.clone()
+        X_nas[mask.bool()] = np.nan
+
+        M = mask.sum(1) > 0
+        nimp = M.sum().item()
+
+        data["M"].append(M.detach().cpu().numpy())
+
+        data_nas = X_nas.cpu().numpy()
+        mask_np = mask.cpu().numpy()
+
+        if args.verbose:
+            n_show = min(5, data_nas.shape[0])
+            logging.info(f"X_train (data_nas), first {n_show}/{data_nas.shape[0]} rows -- NaN "
+                         f"marks the entries mask_train hid, everything else is a real observed "
+                         f"value (this is the ONLY data cross_validate_anchor_nodes ever sees):")
+            print(data_nas[:n_show])
+            logging.info(f"mask_train (mask_np), same {n_show} rows -- True = missing/hidden:")
+            print(mask_np[:n_show].astype(int))
+
         if args.psd_cross_validate:
             lr_nodes_grid = [float(x) for x in args.psd_cv_lr_nodes_grid.split(',')]
             lr_param_grid = [float(x) for x in args.psd_cv_lr_param_grid.split(',')]
@@ -320,7 +370,7 @@ if __name__ == "__main__":
                          f"({len(lr_nodes_grid) * len(lr_param_grid) * len(eta_grid)} combinations, "
                          f"metric={args.psd_cv_metric})...")
             best_lr_nodes, best_lr_param, best_eta, best_score, _ = cross_validate_hyperparams(
-                ground_truth, args.p, lr_nodes_grid, lr_param_grid, eta_grid,
+                data_nas, mask_np, args.p, lr_nodes_grid, lr_param_grid, eta_grid,
                 m_cv=args.psd_cv_m, n_cv=args.psd_cv_n, nbr_bounce_cv=args.psd_cv_bounce,
                 nbr_gradient_steps=args.psd_gradient_steps, nbr_newton_step_Q=args.psd_newton_step_Q,
                 alpha=args.psd_alpha, lbd=args.psd_lbd, mu=args.psd_mu, seed=args.seed + n,
@@ -340,39 +390,14 @@ if __name__ == "__main__":
                          f"m={args.psd_m}, up to {args.psd_cv_anchor_newton_steps} Newton "
                          f"iterations each, metric={args.psd_cv_anchor_metric}...")
             cv_anchor_nodes, best_anchor_score, _ = cross_validate_anchor_nodes(
-                ground_truth, args.p, args.psd_m, args.psd_lr_nodes, args.psd_lr_param,
-                args.psd_eta, n_trials=args.psd_cv_anchor_trials, n_cv=args.psd_cv_n,
-                newton_steps=args.psd_cv_anchor_newton_steps,
+                data_nas, mask_np, args.p, args.psd_m, args.psd_lr_nodes,
+                args.psd_lr_param, args.psd_eta, n_trials=args.psd_cv_anchor_trials,
+                n_cv=args.psd_cv_n, newton_steps=args.psd_cv_anchor_newton_steps,
                 alpha=args.psd_alpha, lbd=args.psd_lbd, mu=args.psd_mu, seed=args.seed + n,
                 verbose=True, cv_metric=args.psd_cv_anchor_metric,
             )
             logging.info(f"anchor-node cross-validation winner: "
                          f"{args.psd_cv_anchor_metric.upper()}={best_anchor_score:.4f}")
-
-        ### Each entry from the second axis has a probability p of being NA
-
-        if args.MAR:
-            logging.info("MAR")
-            mask = MAR_mask(X_true, p, args.p_obs).double()
-        elif args.MNAR_log:
-            logging.info("Logistic MNAR")
-            mask = MNAR_mask_logistic(X_true, p, args.p_obs).double()
-        elif args.MNAR_quant:
-            logging.info("Quantile MNAR")
-            mask = MNAR_mask_quantiles(X_true, p, args.q_mnar, 1-args.p_obs,
-                                       cut='both', MCAR=False).double()
-        else:  # MCAR
-            mask = (torch.rand(ground_truth.shape) < p).double() 
-
-        X_nas = X_true.clone()
-        X_nas[mask.bool()] = np.nan
-
-        M = mask.sum(1) > 0
-        nimp = M.sum().item()
-
-        data["M"].append(M.detach().cpu().numpy())
-
-        data_nas = X_nas.cpu().numpy()
 
         logging.info("PSD Imputation")
 
