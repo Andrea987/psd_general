@@ -264,7 +264,12 @@ def _split_sizes(total_training_rows, num_training_rows, num_validation_rows):
     takes EVERY remaining row unless num_validation_rows caps it, since scoring is much cheaper
     than fitting and more validation rows mean a lower-variance score.
     """
-    num_training_rows = min(num_training_rows, total_training_rows - 1)
+    # cap at half the rows: without this, a num_training_rows larger than the dataset (the
+    # default 200 against e.g. iris's 150) silently leaves a ONE-row validation set, and every
+    # candidate gets "scored" on a single row's handful of entries. The cap only binds when the
+    # requested training size exceeds half the data, so it never shrinks a split that already fits
+    # (800 rows asking for 200 still gives 200 training / 600 validation)
+    num_training_rows = min(num_training_rows, max(1, total_training_rows // 2))
     rows_left_over = total_training_rows - num_training_rows
     num_validation_rows = (rows_left_over if num_validation_rows is None
                            else min(num_validation_rows, rows_left_over))
@@ -347,9 +352,27 @@ def _draw_cv_split(train_data_with_nan, train_missing_mask, extra_hide_probabili
 
 def _score_all_metrics(imputed, split):
     """(rmse, ed, ot) for an imputation of split's validation rows -- see _cv_score."""
-    return (_cv_score(imputed, split.validation_truth, split.extra_hide, split.already_missing, m)
-            for m in ('rmse', 'ed', 'ot'))
+    return tuple(
+        _cv_score(imputed, split.validation_truth, split.extra_hide, split.already_missing, m)
+        for m in ('rmse', 'ed', 'ot'))
 
+
+def _assert_selection_happened(best_score, cv_metric, n_tried):
+    """
+    Guard against a silent non-selection. Every metric can come back NaN -- OT does so whenever the
+    number of scored validation rows reaches _cv_score's otlim, RMSE does when nothing was hidden.
+    NaN then defeats the comparison rather than losing it: `NaN < best` is always False, so a
+    running-minimum loop keeps its initial value (None), and min(..., key=...) silently returns
+    whichever candidate happened to be tried first. Either way cross-validation appears to succeed
+    while having compared nothing, so refuse instead.
+    """
+    if best_score is None or np.isnan(best_score):
+        raise ValueError(
+            f"cross-validation could not select anything: all {n_tried} candidates scored NaN on "
+            f"cv_metric={cv_metric!r}. For 'ot' this usually means the validation set reached "
+            f"_cv_score's otlim ({_OTLIM}) rows -- lower num_validation_rows or pick another "
+            f"metric. Refusing to return a 'winner' that was never actually compared."
+        )
 
 def cross_validate_hyperparams(train_data_with_nan, train_missing_mask, extra_hide_probability,
                                 lr_nodes_grid, lr_param_grid, eta_grid, num_anchor_nodes=10,
@@ -450,7 +473,13 @@ def cross_validate_hyperparams(train_data_with_nan, train_missing_mask, extra_hi
                                  else f"  (selecting by {cv_metric.upper()})"))
 
     best = min(results, key=lambda r: r[metric_idx])
+    _assert_selection_happened(best[metric_idx], cv_metric, len(results))
     return best[1], best[2], best[3], best[metric_idx], results
+
+
+# above this many scored validation rows, the full transport cost is not worth computing
+# and _cv_score returns NaN for 'ot' (see _assert_selection_happened)
+_OTLIM = 5000
 
 
 def _print_cv_setup(base_mask, extra_hide):
@@ -468,7 +497,7 @@ def _print_cv_setup(base_mask, extra_hide):
           f"extra-hidden entries' imputed values vs. their true values.")
 
 
-def _cv_score(X_imputed, X_true_cv, extra_hide, base_mask, metric, otlim=5000):
+def _cv_score(X_imputed, X_true_cv, extra_hide, base_mask, metric, otlim=_OTLIM):
     """
     Score a cross-validation candidate: lower is better for every metric option, so callers can
     always pick with min(..., key=...).
@@ -670,6 +699,8 @@ def cross_validate_anchor_nodes(train_data_with_nan, train_missing_mask, extra_h
                 best_score = score
                 best_anchor_nodes = candidate_anchors
 
+    _assert_selection_happened(
+        best_score if best_anchor_nodes is not None else None, cv_metric, len(results))
     return best_anchor_nodes, best_score, results
 
 
@@ -795,5 +826,7 @@ def cross_validate_hyperparams_and_anchors(
                             best = {'score': score, 'anchors': candidate_anchors,
                                     'lr_nodes': lr_nodes, 'lr_param': lr_param, 'eta': eta_init}
 
+    _assert_selection_happened(
+        best['score'] if best['anchors'] is not None else None, cv_metric, len(results))
     return (best['lr_nodes'], best['lr_param'], best['eta'], best['anchors'], best['score'],
             results)

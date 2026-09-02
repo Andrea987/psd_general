@@ -422,8 +422,8 @@ if __name__ == "__main__":
                          f"{args.psd_cv_anchor_num_splits} split(s) x {n_combos} combinations x "
                          f"{args.psd_cv_anchor_candidates_per_split} anchor candidates = "
                          f"{args.psd_cv_anchor_num_splits * n_combos * args.psd_cv_anchor_candidates_per_split} "
-                         f"fits, {args.psd_num_anchor_nodes} anchor nodes each, trained on "
-                         f"{args.psd_cv_anchor_training_rows} rows, "
+                         f"fits, {args.psd_num_anchor_nodes} anchor nodes each (up to "
+                         f"{args.psd_cv_anchor_training_rows} training rows), "
                          f"metric={args.psd_cv_anchor_metric}...")
             (best_lr_nodes, best_lr_param, best_eta, cv_anchor_nodes,
              best_joint_score, _) = cross_validate_hyperparams_and_anchors(
@@ -456,8 +456,9 @@ if __name__ == "__main__":
             logging.info(f"cross-validating psd_lr_nodes/psd_lr_param/psd_eta: "
                          f"{args.psd_cv_num_splits} split(s) x "
                          f"{len(lr_nodes_grid) * len(lr_param_grid) * len(eta_grid)} combinations, "
-                         f"{args.psd_cv_num_anchor_nodes} anchor nodes each, trained on "
-                         f"{args.psd_cv_training_rows} rows, metric={args.psd_cv_metric}...")
+                         f"{args.psd_cv_num_anchor_nodes} anchor nodes each "
+                         f"(up to {args.psd_cv_training_rows} training rows), "
+                         f"metric={args.psd_cv_metric}...")
             best_lr_nodes, best_lr_param, best_eta, best_score, _ = cross_validate_hyperparams(
                 data_nas, mask_np, args.p, lr_nodes_grid, lr_param_grid, eta_grid,
                 num_anchor_nodes=args.psd_cv_num_anchor_nodes,
@@ -483,8 +484,8 @@ if __name__ == "__main__":
             logging.info(f"cross-validating psd anchor nodes: "
                          f"{args.psd_cv_anchor_num_splits} split(s) x "
                          f"{args.psd_cv_anchor_candidates_per_split} candidates, "
-                         f"{args.psd_num_anchor_nodes} anchor nodes each, trained on "
-                         f"{args.psd_cv_anchor_training_rows} rows with up to "
+                         f"{args.psd_num_anchor_nodes} anchor nodes each (up to "
+                         f"{args.psd_cv_anchor_training_rows} training rows), up to "
                          f"{args.psd_cv_anchor_newton_iterations} Newton iterations, "
                          f"metric={args.psd_cv_anchor_metric}...")
             cv_anchor_nodes, best_anchor_score, _ = cross_validate_anchor_nodes(
