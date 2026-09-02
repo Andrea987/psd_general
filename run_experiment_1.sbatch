@@ -62,7 +62,7 @@ conda activate psd_general
 #                             subsamples of the training part, score each by training a
 #                             Newton-only fit on the training part and imputing the held-out
 #                             validation part, and use the best one
-#   --psd_cv_anchor_candidates_per_split  candidate anchor-node subsamples to try, per split
+#   --psd_cv_anchor_candidates_per_split  each split, sample this number of set of anchor nodes. Each set contains psd_number_anchor_nodes
 #   --psd_cv_anchor_num_splits  independent training/validation splits to draw (1 = a single
 #                             split, i.e. every candidate sits one common exam). Raising it stops
 #                             any row being permanently excluded from being anchor material and
@@ -154,13 +154,13 @@ python3 -u main_real_dataset.py \
     --psd_bounce=5 \
     --psd_gradient_steps=2 \
     --psd_newton_step_Q=3 \
-    --psd_cv_lr_nodes_grid=1e-4,3e-4,1e-3,3e-3,1e-2 \
-    --psd_cv_lr_param_grid=1e-5,3e-5,1e-4,3e-4,1e-3 \
-    --psd_cv_eta_grid=-1.2,-1.1,-1.0,-0.9,-0.8,-0.7,-0.6,-0.5,-0.4,-0.3,-0.2,-0.1,0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,1.1,1.2 \
+    --psd_cv_lr_nodes_grid=3e-4,1e-3,3e-3 \
+    --psd_cv_lr_param_grid=3e-5,1e-4,3e-4,1e-3 \
+    --psd_cv_eta_grid=-1.0,-0.8,-0.6,-0.4,-0.2,0.2,0.4,0.6,0.8,1.0 \
     --psd_distributional_cross_validate \
     --psd_cv_joint_num_bounces=5 \
-    --psd_cv_anchor_candidates_per_split=10 \
-    --psd_cv_anchor_num_splits=1 \
+    --psd_cv_anchor_candidates_per_split=4 \
+    --psd_cv_anchor_num_splits=3 \
     --psd_cv_anchor_training_rows=200 \
     --psd_cv_anchor_newton_iterations=5 \
     --psd_cv_anchor_metric=ed \

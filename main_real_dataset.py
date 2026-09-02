@@ -1015,6 +1015,10 @@ if __name__ == "__main__":
         for metric, stats in method_mean_sd.items():
             logging.info(f'  {metric}: mean {stats["mean"]:.4f}  std {stats["std"]:.4f}')
 
+    # these writes are the last thing the script does, after every method has run. If out_dir does
+    # not exist the whole job is lost at the finish line, so create it rather than crash here
+    os.makedirs(args.out_dir, exist_ok=True)
+
     if args.out_path is None:
         score_file = "_".join([dataset, "scores.pkl"])
     else:
