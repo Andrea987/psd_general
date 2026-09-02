@@ -24,10 +24,14 @@ conda activate psd_general
 #                             --perc_test_set
 #   --max_train_obs           training-set size used for datasets over --large_dataset_threshold
 #   --sinkhorn_niter          number of Sinkhorn iterations
-#   --psd_m                   number of anchor nodes
-#   --psd_anchor_init         data_subset: anchor nodes are a random subset of the mean-imputed
-#                             data. uniform_hypercube: anchor nodes are sampled i.i.d. uniformly
-#                             in the bounding box of the (mean-imputed) data instead
+#   --psd_num_anchor_nodes    number of anchor nodes
+#   --psd_anchor_init         data_subset: anchor nodes are a random subset of the initially-
+#                             imputed data. uniform_hypercube: anchor nodes are sampled i.i.d.
+#                             uniformly in the bounding box of that same data instead
+#   --psd_anchor_impute       how missing entries are filled to place the anchor nodes, in both the
+#                             cross-validation fits and the real fit: mean (default), median,
+#                             most_frequent, or constant (fills with 0). Only positions the anchor
+#                             nodes -- never produces the reported imputation
 #   --psd_eta                 initial LOG-precision of the Gaussians (actual starting precision = exp(this))
 #   --psd_eta_init_mode       fixed: every dimension starts at --psd_eta. empirical: every
 #                             dimension starts at 1 / empirical_variance instead, ignoring --psd_eta
@@ -45,20 +49,31 @@ conda activate psd_general
 #   --psd_cross_validate      before fitting, cross-validate --psd_lr_nodes/--psd_lr_param/
 #                             --psd_eta on a small, fast validation subsample and use the best
 #                             combination (overrides those three flags)
-#   --psd_cv_n                validation subsample size for --psd_cross_validate
-#   --psd_cv_m                number of anchor nodes for --psd_cross_validate
-#   --psd_cv_bounce           number of alternating minimization bounces for --psd_cross_validate
+#   --psd_cv_validation_rows  validation subsample size for --psd_cross_validate
+#   --psd_cv_num_anchor_nodes number of anchor nodes for --psd_cross_validate
+#   --psd_cv_num_bounces      number of alternating minimization bounces for --psd_cross_validate
 #   --psd_cv_lr_nodes_grid    comma-separated candidate values for --psd_lr_nodes
 #   --psd_cv_lr_param_grid    comma-separated candidate values for --psd_lr_param
 #   --psd_cv_eta_grid         comma-separated candidate LOG-precision starting points for --psd_eta
 #   --psd_cv_metric           validation metric for --psd_cross_validate: rmse (default), ed, or
 #                             ot. RMSE/ED/OT are always all computed and printed for every
 #                             candidate; this only picks which one chooses the winner
-#   --psd_anchor_cross_validate  after hyperparameters are chosen, try --psd_cv_anchor_trials
-#                             random m-row anchor-node subsamples (m = --psd_m), score each with a
-#                             Newton-only fit on a small validation subsample, and use the best one
-#   --psd_cv_anchor_trials    number of candidate anchor-node subsamples to try
-#   --psd_cv_anchor_newton_steps  max Newton iterations per anchor-node candidate
+#   --psd_anchor_cross_validate  after hyperparameters are chosen, split the training rows into a
+#                             training and a validation part, try several random anchor-node
+#                             subsamples of the training part, score each by training a
+#                             Newton-only fit on the training part and imputing the held-out
+#                             validation part, and use the best one
+#   --psd_cv_anchor_candidates_per_split  candidate anchor-node subsamples to try, per split
+#   --psd_cv_anchor_num_splits  independent training/validation splits to draw (1 = a single
+#                             split, i.e. every candidate sits one common exam). Raising it stops
+#                             any row being permanently excluded from being anchor material and
+#                             makes the winner less split-dependent, at proportional cost
+#   --psd_cv_anchor_training_rows  rows each candidate is TRAINED on, per split -- the knob that
+#                             sets the cost, since the Newton solve scales with the rows fit on
+#   --psd_cv_anchor_validation_rows  rows each candidate is SCORED on, per split (unset = every
+#                             row left over after the training rows, which is free variance
+#                             reduction since scoring is far cheaper than fitting)
+#   --psd_cv_anchor_newton_iterations  max Newton iterations per anchor-node candidate
 #   --psd_cv_anchor_metric    validation metric for --psd_anchor_cross_validate: rmse (default),
 #                             ed, or ot. ed/ot compare whole rows, so entries already missing
 #                             before extra-hiding are zeroed out in both the imputed and true
@@ -111,7 +126,8 @@ python3 -u main_real_dataset.py \
     --large_dataset_threshold=1000 \
     --max_train_obs=800 \
     --sinkhorn_niter=3000 \
-    --psd_m=65 \
+    --psd_num_anchor_nodes=65 \
+    --psd_anchor_impute=constant \
     --psd_eta=1.6 \
     --psd_alpha=1e-6 \
     --psd_lbd=1e-1 \
@@ -122,16 +138,18 @@ python3 -u main_real_dataset.py \
     --psd_gradient_steps=2 \
     --psd_newton_step_Q=3 \
     --psd_cross_validate \
-    --psd_cv_n=200 \
-    --psd_cv_m=10 \
-    --psd_cv_bounce=20 \
-    --psd_cv_lr_nodes_grid=1e-4,1e-3,1e-2 \
-    --psd_cv_lr_param_grid=1e-5,1e-4,1e-3 \
+    --psd_cv_validation_rows=200 \
+    --psd_cv_num_anchor_nodes=10 \
+    --psd_cv_num_bounces=20 \
+    --psd_cv_lr_nodes_grid=1e-4,3e-4,1e-3,3e-3,1e-2 \
+    --psd_cv_lr_param_grid=1e-5,3e-5,1e-4,3e-4,1e-3 \
     --psd_cv_eta_grid=-1.2,-1.1,-1.0,-0.9,-0.8,-0.7,-0.6,-0.5,-0.4,-0.3,-0.2,-0.1,0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,1.1,1.2 \
     --psd_cv_metric=ed \
     --psd_anchor_cross_validate \
-    --psd_cv_anchor_trials=10 \
-    --psd_cv_anchor_newton_steps=5 \
+    --psd_cv_anchor_candidates_per_split=10 \
+    --psd_cv_anchor_num_splits=1 \
+    --psd_cv_anchor_training_rows=200 \
+    --psd_cv_anchor_newton_iterations=5 \
     --psd_cv_anchor_metric=ed \
     --verbose \
     --verbose_newton \
