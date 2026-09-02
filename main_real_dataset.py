@@ -211,8 +211,14 @@ parser.add_argument('--psd_cv_anchor_num_splits', type=int, default=1,
                          'on one lucky split, at proportional cost (splits x candidates fits). '
                          'Note candidates from different splits are scored on different '
                          'validation rows, so their scores are not perfectly comparable')
-parser.add_argument('--psd_cv_anchor_newton_iterations', type=int, default=10,
-                    help='max Newton iterations per candidate for --psd_anchor_cross_validate')
+parser.add_argument('--psd_cv_newton_iterations', type=int, default=10,
+                    help='max Newton iterations per inner Q solve inside EVERY cross-validation '
+                         'fit -- --psd_cross_validate, --psd_anchor_cross_validate, '
+                         '--psd_joint_cross_validate and --psd_distributional_cross_validate all '
+                         'read this one flag. The real fit uses --psd_newton_step_Q instead; set '
+                         'the two to the same value if you want candidates judged under the same '
+                         'Q convergence the final model will have. It is a cap, not a fixed count '
+                         '-- Newton exits early once its decrement falls below tolerance')
 parser.add_argument('--psd_cv_anchor_training_rows', type=int, default=200,
                     help='number of rows each candidate is TRAINED on, per split, for '
                          '--psd_anchor_cross_validate. This is the knob that sets the cost, since '
@@ -446,7 +452,7 @@ if __name__ == "__main__":
                 num_validation_rows=args.psd_cv_anchor_validation_rows,
                 num_bounces=args.psd_cv_joint_num_bounces,
                 num_gradient_steps=args.psd_gradient_steps,
-                newton_iterations=args.psd_cv_anchor_newton_iterations,
+                newton_iterations=args.psd_cv_newton_iterations,
                 alpha=args.psd_alpha, lbd=args.psd_lbd, mu=args.psd_mu, seed=args.seed + n,
                 verbose=True, cv_metric=args.psd_cv_anchor_metric,
                 anchor_impute=args.psd_anchor_impute,
@@ -482,7 +488,7 @@ if __name__ == "__main__":
                 num_validation_rows=args.psd_cv_anchor_validation_rows,
                 num_bounces=args.psd_cv_joint_num_bounces,
                 num_gradient_steps=args.psd_gradient_steps,
-                newton_iterations=args.psd_cv_anchor_newton_iterations,
+                newton_iterations=args.psd_cv_newton_iterations,
                 alpha=args.psd_alpha, lbd=args.psd_lbd, mu=args.psd_mu, seed=args.seed + n,
                 verbose=True, cv_metric=args.psd_cv_anchor_metric,
                 anchor_impute=args.psd_anchor_impute,
@@ -515,7 +521,7 @@ if __name__ == "__main__":
                 num_validation_rows=args.psd_cv_validation_rows,
                 num_bounces=args.psd_cv_num_bounces,
                 num_gradient_steps=args.psd_gradient_steps,
-                newton_iterations=args.psd_newton_step_Q,
+                newton_iterations=args.psd_cv_newton_iterations,
                 alpha=args.psd_alpha, lbd=args.psd_lbd, mu=args.psd_mu, seed=args.seed + n,
                 verbose=True, cv_metric=args.psd_cv_metric,
                 anchor_impute=args.psd_anchor_impute,
@@ -535,7 +541,7 @@ if __name__ == "__main__":
                          f"{args.psd_cv_anchor_candidates_per_split} candidates, "
                          f"{args.psd_num_anchor_nodes} anchor nodes each (up to "
                          f"{args.psd_cv_anchor_training_rows} training rows), up to "
-                         f"{args.psd_cv_anchor_newton_iterations} Newton iterations, "
+                         f"{args.psd_cv_newton_iterations} Newton iterations, "
                          f"metric={args.psd_cv_anchor_metric}...")
             cv_anchor_nodes, best_anchor_score, _ = cross_validate_anchor_nodes(
                 data_nas, mask_np, args.p, args.psd_num_anchor_nodes, args.psd_lr_nodes,
@@ -544,7 +550,7 @@ if __name__ == "__main__":
                 num_splits=args.psd_cv_anchor_num_splits,
                 num_training_rows=args.psd_cv_anchor_training_rows,
                 num_validation_rows=args.psd_cv_anchor_validation_rows,
-                newton_iterations=args.psd_cv_anchor_newton_iterations,
+                newton_iterations=args.psd_cv_newton_iterations,
                 alpha=args.psd_alpha, lbd=args.psd_lbd, mu=args.psd_mu,
                 # offset so this stage draws a DIFFERENT split from the hyperparameter CV above,
                 # which used seed=args.seed + n -- otherwise the anchors would be scored on rows

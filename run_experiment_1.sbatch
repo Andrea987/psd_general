@@ -72,7 +72,10 @@ conda activate psd_general
 #   --psd_cv_anchor_validation_rows  rows each candidate is SCORED on, per split (unset = every
 #                             row left over after the training rows, which is free variance
 #                             reduction since scoring is far cheaper than fitting)
-#   --psd_cv_anchor_newton_iterations  max Newton iterations per anchor-node candidate
+#   --psd_cv_newton_iterations  max Newton iterations per inner Q solve inside EVERY CV fit
+#                             (all four CV modes read this one flag). The real fit uses
+#                             --psd_newton_step_Q instead; keep them equal to judge
+#                             candidates under the same Q convergence the final model gets
 #   --psd_cv_anchor_metric    validation metric for --psd_anchor_cross_validate: rmse (default),
 #                             ed, or ot. ed/ot compare whole rows, so entries already missing
 #                             before extra-hiding are zeroed out in both the imputed and true
@@ -154,15 +157,15 @@ python3 -u main_real_dataset.py \
     --psd_bounce=5 \
     --psd_gradient_steps=2 \
     --psd_newton_step_Q=3 \
-    --psd_cv_lr_nodes_grid=3e-4,1e-3,3e-3 \
-    --psd_cv_lr_param_grid=3e-5,1e-4,3e-4,1e-3 \
-    --psd_cv_eta_grid=-0.6,-0.4,0.2,0.4,0.6,1.2,1.4 \
+    --psd_cv_lr_nodes_grid=3e-4 \
+    --psd_cv_lr_param_grid=3e-4 \
+    --psd_cv_eta_grid=0.4,0.6,0.8,1.2, \
     --psd_distributional_cross_validate \
     --psd_cv_joint_num_bounces=5 \
     --psd_cv_anchor_candidates_per_split=4 \
     --psd_cv_anchor_num_splits=3 \
-    --psd_cv_anchor_training_rows=200 \
-    --psd_cv_anchor_newton_iterations=5 \
+    --psd_cv_anchor_training_rows=100 \
+    --psd_cv_newton_iterations=3 \
     --psd_cv_anchor_metric=ed \
     --verbose \
     --verbose_newton \
