@@ -156,7 +156,7 @@ python3 -u main_real_dataset.py \
     --psd_newton_step_Q=3 \
     --psd_cv_lr_nodes_grid=3e-4,1e-3,3e-3 \
     --psd_cv_lr_param_grid=3e-5,1e-4,3e-4,1e-3 \
-    --psd_cv_eta_grid=-1.0,-0.8,-0.6,-0.4,-0.2,0.2,0.4,0.6,0.8,1.0 \
+    --psd_cv_eta_grid=-0.6,-0.4,0.2,0.4,0.6,1.2,1.4 \
     --psd_distributional_cross_validate \
     --psd_cv_joint_num_bounces=5 \
     --psd_cv_anchor_candidates_per_split=4 \
