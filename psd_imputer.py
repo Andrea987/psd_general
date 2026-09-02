@@ -6,6 +6,7 @@ given its observed entries (see marginalize_condition.condition and sampling.mea
 """
 
 import warnings
+from collections import namedtuple
 
 import numpy as np
 import ot
@@ -244,124 +245,212 @@ def psd_impute(X_nas, mask, m=50, eta_init=2.0, alpha=1e-6, lbd=1e-4, mu=1e-4,
     return X_imputed, history, multiple_imp
 
 
-def cross_validate_hyperparams(X_train_filled_with_NaN, mask_train, p, lr_nodes_grid,
-                                lr_param_grid, eta_grid, m_cv=10, n_cv=200, nbr_bounce_cv=20,
-                                nbr_gradient_steps=5, nbr_newton_step_Q=20, alpha=1e-6, lbd=1e-1,
-                                mu=1e-3, seed=0, verbose=False, cv_metric='rmse',
-                                anchor_impute='mean'):
+_CvSplit = namedtuple('_CvSplit', [
+    'training_dataset',       # (num_training_rows, d) rows to fit on, 0 on the missing entries
+    'training_mask',          # (num_training_rows, d) True = missing
+    'training_anchor_pool',   # (num_training_rows, d) initially-imputed, to draw anchor nodes from
+    'validation_dataset',     # (num_validation_rows, d) rows to score on, 0 where hidden
+    'hidden_from_predictor',  # (num_validation_rows, d) already_missing | extra_hide
+    'validation_truth',       # (num_validation_rows, d) true values at the extra_hide positions
+    'extra_hide',             # (num_validation_rows, d) the entries actually scored
+    'already_missing',        # (num_validation_rows, d) missing before extra-hiding
+])
+
+
+def _split_sizes(total_training_rows, num_training_rows, num_validation_rows):
     """
-    Fast cross-validation for (l_rate_nodes, l_rate_param, eta_init): fit small, quick psd models
-    on a small validation subsample and score each candidate by how well it recovers ADDITIONALLY
-    hidden entries -- not the ones already missing -- via RMSE, ED, or OT (see cv_metric).
+    Validated sizes of one disjoint training/validation partition. num_training_rows is the knob
+    (it drives the cost -- the Newton solve scales with the rows fit on); the validation part then
+    takes EVERY remaining row unless num_validation_rows caps it, since scoring is much cheaper
+    than fitting and more validation rows mean a lower-variance score.
+    """
+    num_training_rows = min(num_training_rows, total_training_rows - 1)
+    rows_left_over = total_training_rows - num_training_rows
+    num_validation_rows = (rows_left_over if num_validation_rows is None
+                           else min(num_validation_rows, rows_left_over))
+    assert num_training_rows >= 1 and num_validation_rows >= 1, (
+        f"need at least 2 training rows to split into a training set and a validation set, got "
+        f"{total_training_rows} (num_training_rows={num_training_rows}, "
+        f"num_validation_rows={num_validation_rows})"
+    )
+    return num_training_rows, num_validation_rows
 
-    (X_train_filled_with_NaN, mask_train) is the ONLY data source anywhere in this function --
-    same principle as cross_validate_anchor_nodes (see its docstring): the validation subsample
-    and its base_mask are drawn directly from the REAL, already-missing training data -- not a
-    freshly synthesized MCAR mask over a separate fully-observed array. This matters beyond just
-    avoiding leaks: a freshly-synthesized mask is always plain MCAR, so if the real experiment
-    uses --MAR/--MNAR_log/--MNAR_quant, hyperparameters tuned against a from-scratch MCAR mask
-    would be tuned against a missingness pattern that doesn't match what the real fit actually
-    faces. Reusing (X_train_filled_with_NaN, mask_train) removes that mismatch too.
 
-    Procedure: draw an n_cv-row subsample of (X_train_filled_with_NaN, mask_train), then
-    additionally hide an extra MCAR fraction (at probability p) of what's already observed in that
-    subsample. Only that second, extra mask is scored: for each candidate, fit with m_cv anchor
-    nodes / nbr_bounce_cv bounces (small and few, for speed) and compute RMSE/ED/OT between the
-    imputed and true values at the extra-hidden positions (see _cv_score) -- the "true" value is
-    simply what X_train_filled_with_NaN already held there before the extra hide, exactly as in
-    cross_validate_anchor_nodes.
+def _draw_cv_split(train_data_with_nan, train_missing_mask, extra_hide_probability,
+                   num_training_rows, num_validation_rows, anchor_impute, rng):
+    """
+    Draw ONE disjoint training/validation partition of the training rows -- the single
+    methodology every cross-validation function in this module uses, so they cannot drift apart.
 
-    :param X_train_filled_with_NaN: (n_train, d) the REAL training data, NaN at the entries
-        mask_train marks missing -- typically main_real_dataset.py's data_nas
-    :param mask_train: (n_train, d) boolean (or 0/1), True/1 = missing -- typically
-        main_real_dataset.py's mask
-    :param p: MCAR probability for the additional validation-only hide (extra_hide), same
+    The training rows are what a candidate model is fit on (and the only rows its anchor nodes are
+    ever drawn from); the validation rows are held out, have an extra MCAR fraction of their still
+    observed entries hidden, and are then imputed by the fitted model and scored on the recovery
+    of exactly those extra-hidden entries.
+
+    The two parts share no row. That is what makes a leak impossible: the extra-hidden entries are
+    ordinary OBSERVED training data (that is the whole premise of being able to grade them), so
+    anything built from a validation row -- an anchor node above all -- would carry the very
+    values being scored. Drawing anchors only from the disjoint training rows removes that channel
+    by construction rather than guarding against it.
+
+    :return: _CvSplit
+    """
+    total_training_rows, num_columns = train_data_with_nan.shape
+    permuted = rng.permutation(total_training_rows)
+    training_idx = permuted[:num_training_rows]
+    validation_idx = permuted[num_training_rows:num_training_rows + num_validation_rows]
+
+    # ---- training side: never touched by the extra hiding below ----
+    training_data = train_data_with_nan[training_idx]  # already NaN where the mask says so
+    training_mask = train_missing_mask[training_idx]
+    # fill_value is ignored unless the strategy is 'constant'
+    training_anchor_pool = SimpleImputer(strategy=anchor_impute, fill_value=0.0).fit_transform(
+        np.where(training_mask, np.nan, training_data))
+    training_dataset = np.where(training_mask, 0.0, training_data)  # dummy, as psd_impute does
+
+    # ---- validation side ----
+    validation_data = train_data_with_nan[validation_idx]
+    already_missing = train_missing_mask[validation_idx]
+    # a fully-missing row can't be fixed here -- there is no real value left in
+    # train_data_with_nan to reveal, it's already NaN. This must be prevented where the mask is
+    # actually created, before any value is discarded (see main_real_dataset.py, which reveals one
+    # entry per fully-missing row right after building the real mask). Fail loudly instead of
+    # silently mishandling it if that invariant was ever violated.
+    assert not (already_missing.sum(axis=1) == num_columns).any(), (
+        "train_missing_mask has at least one fully-missing row in the validation subsample -- fix "
+        "this where the mask is constructed (see reveal_random_entry_if_fully_missing), not here"
+    )
+
+    still_observed = ~already_missing
+    extra_hide = (rng.random((num_validation_rows, num_columns))
+                  < extra_hide_probability) & still_observed
+    # never extra-hide the last observed entry of a row (would leave nothing to condition on)
+    extra_hide[np.where((already_missing | extra_hide).sum(axis=1) == num_columns)[0]] = False
+    # guarantee there is always at least one entry to actually validate against
+    hide_at_least_one_entry_if_none_hidden(extra_hide, still_observed, rng)
+
+    # the "true" value at every extra_hide position is simply what validation_data already holds
+    # there (it's observed -- not NaN -- since extra_hide is a subset of ~already_missing);
+    # capture it BEFORE additionally hiding it below
+    validation_truth = validation_data.copy()
+
+    hidden_from_predictor = already_missing | extra_hide
+    assert np.array_equal(hidden_from_predictor | already_missing, hidden_from_predictor), (
+        "hidden_from_predictor must be a superset of already_missing -- an entry already missing "
+        "beforehand must never come back as observed"
+    )
+    validation_dataset = np.where(hidden_from_predictor, 0.0, validation_data)
+
+    return _CvSplit(training_dataset, training_mask, training_anchor_pool, validation_dataset,
+                    hidden_from_predictor, validation_truth, extra_hide, already_missing)
+
+
+def _score_all_metrics(imputed, split):
+    """(rmse, ed, ot) for an imputation of split's validation rows -- see _cv_score."""
+    return (_cv_score(imputed, split.validation_truth, split.extra_hide, split.already_missing, m)
+            for m in ('rmse', 'ed', 'ot'))
+
+
+def cross_validate_hyperparams(train_data_with_nan, train_missing_mask, extra_hide_probability,
+                                lr_nodes_grid, lr_param_grid, eta_grid, num_anchor_nodes=10,
+                                num_splits=1, num_training_rows=200, num_validation_rows=None,
+                                num_bounces=20, num_gradient_steps=5, newton_iterations=20,
+                                alpha=1e-6, lbd=1e-1, mu=1e-3, seed=0, verbose=False,
+                                cv_metric='rmse', anchor_impute='mean'):
+    """
+    Cross-validation for (l_rate_nodes, l_rate_param, eta_init), on the same DISJOINT
+    TRAINING/VALIDATION ROW SPLIT that cross_validate_anchor_nodes uses (see _draw_cv_split):
+
+      OUTER, num_splits times -- draw a fresh, independent split of the training rows.
+        INNER, once per (lr_nodes, lr_param, eta_init) combination -- fit on that split's TRAINING
+        rows, impute its held-out VALIDATION rows, and score the recovery of just the entries
+        extra-hidden there (see _cv_score).
+
+      Return the combination with the best single score over all splits * combinations.
+
+    num_splits=1 is one split, every combination sitting one common exam. Raising it makes the
+    winner less dependent on one split coming up easy or hard, at proportional cost; combinations
+    from different splits are scored on different validation rows, so their scores are not
+    perfectly comparable.
+
+    (train_data_with_nan, train_missing_mask) is the ONLY data source anywhere in this function:
+    the split and its already_missing mask come from the REAL, already-missing training data, not
+    a freshly synthesized MCAR mask over a separate fully-observed array. Beyond avoiding leaks,
+    that matters because a freshly-synthesized mask is always plain MCAR, so under
+    --MAR/--MNAR_log/--MNAR_quant the hyperparameters would be tuned against a missingness pattern
+    that doesn't match what the real fit faces.
+
+    :param train_data_with_nan: (total_training_rows, num_columns) the REAL training data, NaN at
+        the entries train_missing_mask marks missing -- typically main_real_dataset.py's data_nas
+    :param train_missing_mask: (total_training_rows, num_columns) boolean (or 0/1), True/1 =
+        missing -- typically main_real_dataset.py's mask
+    :param extra_hide_probability: MCAR probability for the additional validation-only hide, same
         convention as the main experiment's --p
     :param lr_nodes_grid, lr_param_grid, eta_grid: lists of candidate l_rate_nodes, l_rate_param,
         eta_init (LOG-precision, see fit_psd_model) values; every combination is tried
-    :param m_cv: number of anchor nodes for the validation fits (default 10, small for speed)
-    :param n_cv: validation subsample size (default 200, small for speed)
-    :param nbr_bounce_cv: number of alternating_minimization bounces for the validation fits
-        (default 20, few for speed)
-    :param nbr_gradient_steps, nbr_newton_step_Q, alpha, lbd, mu, seed: see fit_psd_model (lbd/mu
-        are divided by n_cv internally, matching the convention used for the full-scale fit)
-    :param verbose: if True, print every candidate's validation RMSE/ED/OT as it's evaluated
+    :param num_anchor_nodes: anchor nodes for the validation fits (default 10, small for speed).
+        These are picked by fit_psd_model itself, from the split's training rows
+    :param num_splits, num_training_rows, num_validation_rows: the split geometry -- see
+        _split_sizes and cross_validate_anchor_nodes, which take the same three
+    :param num_bounces: alternating_minimization bounces per validation fit (default 20, few for
+        speed)
+    :param num_gradient_steps, newton_iterations, alpha, lbd, mu, seed: see fit_psd_model (lbd/mu
+        divided by num_training_rows, matching the full-scale convention)
+    :param verbose: if True, print every combination's validation RMSE/ED/OT as it's evaluated
         (all three are always computed and printed, regardless of cv_metric, purely for visibility)
     :param cv_metric: 'rmse' (default), 'ed', or 'ot' -- which of the three printed scores is
-        actually used to pick the winning combination; see _cv_score. 'ed'/'ot' compare whole
-        rows, so the entries already missing before extra-hiding (base_mask) are zeroed out in
-        both the imputed and true arrays first, so the score reflects only how well the
-        extra-hidden entries were recovered
+        actually used to pick the winning combination; see _cv_score
     :param anchor_impute: how missing entries are filled to place each validation fit's anchor
         nodes -- see fit_psd_model. Should match the value used for the real fit
     :return: (best_lr_nodes, best_lr_param, best_eta, best_score, results) -- best_score is
         whichever of rmse/ed/ot cv_metric selected on; results is the full list of
-        (lr_nodes, lr_param, eta, rmse, ed, ot) tuples tried, in evaluation order
+        (split_index, lr_nodes, lr_param, eta, rmse, ed, ot) tuples tried, in evaluation order
     """
-    metric_idx = {'rmse': 3, 'ed': 4, 'ot': 5}[cv_metric]
+    metric_idx = {'rmse': 4, 'ed': 5, 'ot': 6}[cv_metric]
     rng = np.random.default_rng(seed)
-    mask_train = np.asarray(mask_train, dtype=bool)
-    n_train, d = X_train_filled_with_NaN.shape
-    n_cv = min(n_cv, n_train)
-
-    val_idx = rng.choice(n_train, size=n_cv, replace=False)
-    X_cv = X_train_filled_with_NaN[val_idx]  # already NaN at mask_train positions
-    base_mask = mask_train[val_idx]
-    # see cross_validate_anchor_nodes: a fully-missing row can't be fixed here (no real value left
-    # to reveal) -- must be prevented where mask_train is built (main_real_dataset.py)
-    assert not (base_mask.sum(axis=1) == d).any(), (
-        "mask_train has at least one fully-missing row in the validation subsample -- fix this "
-        "where mask_train is constructed (see reveal_random_entry_if_fully_missing), not here"
-    )
-
-    # additionally hide some of what's still observed -- these are the entries we score against
-    observed = ~base_mask
-    extra_hide = (rng.random((n_cv, d)) < p) & observed
-    # never extra-hide the last observed entry of a row (would leave nothing to condition on)
-    would_be_fully_missing = np.where((base_mask | extra_hide).sum(axis=1) == d)[0]
-    extra_hide[would_be_fully_missing] = False
-    # guarantee there is always at least one entry to actually validate against (see
-    # hide_at_least_one_entry_if_none_hidden)
-    hide_at_least_one_entry_if_none_hidden(extra_hide, observed, rng)
-
-    # the "true" value at every extra_hide position is simply what X_cv already holds there --
-    # captured BEFORE additionally hiding it below (see cross_validate_anchor_nodes)
-    X_true_cv = X_cv.copy()
-
-    combined_mask = base_mask | extra_hide
-    assert np.array_equal(combined_mask | base_mask, combined_mask), (
-        "combined_mask must be a superset of base_mask -- an entry already missing beforehand "
-        "must never come back as observed"
-    )
-    X_nas_cv = np.where(combined_mask, np.nan, X_cv)
-
-    if verbose:
-        _print_cv_setup(base_mask, extra_hide)
+    train_missing_mask = np.asarray(train_missing_mask, dtype=bool)
+    total_training_rows = train_data_with_nan.shape[0]
+    num_training_rows, num_validation_rows = _split_sizes(
+        total_training_rows, num_training_rows, num_validation_rows)
 
     results = []
-    for lr_nodes in lr_nodes_grid:
-        for lr_param in lr_param_grid:
-            for eta_init in eta_grid:
-                X_imputed, _, _ = psd_impute(
-                    X_nas_cv, combined_mask,
-                    m=m_cv, eta_init=eta_init, alpha=alpha, lbd=lbd / n_cv, mu=mu / n_cv,
-                    l_rate_nodes=lr_nodes, l_rate_param=lr_param,
-                    nbr_bounce=nbr_bounce_cv, nbr_gradient_steps=nbr_gradient_steps,
-                    nbr_newton_step_Q=nbr_newton_step_Q, seed=seed,
-                    anchor_impute=anchor_impute,
-                )
-                rmse = _cv_score(X_imputed, X_true_cv, extra_hide, base_mask, 'rmse')
-                ed = _cv_score(X_imputed, X_true_cv, extra_hide, base_mask, 'ed')
-                ot_dist = _cv_score(X_imputed, X_true_cv, extra_hide, base_mask, 'ot')
-                results.append((lr_nodes, lr_param, eta_init, rmse, ed, ot_dist))
-                if verbose:
-                    print(f"  CV: lr_nodes={lr_nodes:.1e}  lr_param={lr_param:.1e}  "
-                          f"eta_init={eta_init:.4f}  RMSE={rmse:.4f}  ED={ed:.4f}  OT={ot_dist:.4f}"
-                          + ("" if cv_metric == 'rmse' else f"  (selecting by {cv_metric.upper()})"))
+    for split_index in range(num_splits):
+        split = _draw_cv_split(train_data_with_nan, train_missing_mask, extra_hide_probability,
+                               num_training_rows, num_validation_rows, anchor_impute, rng)
+        if verbose:
+            print(f"  Split {split_index + 1}/{num_splits}: {num_training_rows} training rows, "
+                  f"{num_validation_rows} validation rows, disjoint (of {total_training_rows} "
+                  f"training rows).")
+            if split_index == 0:
+                _print_cv_setup(split.already_missing, split.extra_hide)
+
+        for lr_nodes in lr_nodes_grid:
+            for lr_param in lr_param_grid:
+                for eta_init in eta_grid:
+                    # fit on the TRAINING rows (anchor nodes picked by fit_psd_model from those
+                    # rows), then apply the fitted model to the held-out VALIDATION rows
+                    Q, anchors, precision = fit_psd_model(
+                        split.training_dataset, split.training_mask.astype(float),
+                        num_anchor_nodes, eta_init, alpha, lbd / num_training_rows,
+                        mu / num_training_rows, lr_nodes, lr_param, num_bounces,
+                        num_gradient_steps, newton_iterations, seed=seed,
+                        anchor_impute=anchor_impute,
+                    )[:3]
+                    imputed = impute_mean(split.validation_dataset, split.hidden_from_predictor,
+                                          Q, anchors, precision)
+
+                    rmse, ed, ot_dist = _score_all_metrics(imputed, split)
+                    results.append((split_index, lr_nodes, lr_param, eta_init, rmse, ed, ot_dist))
+                    if verbose:
+                        print(f"    Split {split_index + 1}/{num_splits} "
+                              f"lr_nodes={lr_nodes:.1e}  lr_param={lr_param:.1e}  "
+                              f"eta_init={eta_init:.4f}  RMSE={rmse:.4f}  ED={ed:.4f}  "
+                              f"OT={ot_dist:.4f}"
+                              + ("" if cv_metric == 'rmse'
+                                 else f"  (selecting by {cv_metric.upper()})"))
 
     best = min(results, key=lambda r: r[metric_idx])
-    best_lr_nodes, best_lr_param, best_eta, best_score = best[0], best[1], best[2], best[metric_idx]
-    return best_lr_nodes, best_lr_param, best_eta, best_score, results
+    return best[1], best[2], best[3], best[metric_idx], results
 
 
 def _print_cv_setup(base_mask, extra_hide):
@@ -522,20 +611,8 @@ def cross_validate_anchor_nodes(train_data_with_nan, train_missing_mask, extra_h
     train_missing_mask = np.asarray(train_missing_mask, dtype=bool)
     total_training_rows, num_columns = train_data_with_nan.shape
 
-    # sizes of the two disjoint parts of each split. num_training_rows is the knob (it drives the
-    # cost -- the Newton solve scales with the number of rows fit on); the validation part then
-    # takes EVERY remaining row by default, since scoring is comparatively cheap and more
-    # validation rows mean a lower-variance estimate of each candidate's quality. Sharing no row
-    # is what makes a leak impossible here -- see the docstring
-    num_training_rows = min(num_training_rows, total_training_rows - 1)
-    rows_left_over = total_training_rows - num_training_rows
-    num_validation_rows = (rows_left_over if num_validation_rows is None
-                           else min(num_validation_rows, rows_left_over))
-    assert num_training_rows >= 1 and num_validation_rows >= 1, (
-        f"need at least 2 training rows to split into a training set and a validation set, got "
-        f"{total_training_rows} (num_training_rows={num_training_rows}, "
-        f"num_validation_rows={num_validation_rows})"
-    )
+    num_training_rows, num_validation_rows = _split_sizes(
+        total_training_rows, num_training_rows, num_validation_rows)
     if num_anchor_nodes > num_training_rows:
         warnings.warn(
             f"num_anchor_nodes={num_anchor_nodes} exceeds num_training_rows={num_training_rows}, "
@@ -548,95 +625,42 @@ def cross_validate_anchor_nodes(train_data_with_nan, train_missing_mask, extra_h
     results = []
     best_anchor_nodes, best_score = None, np.inf
 
-    # OUTER LOOP: a fresh, independently drawn train/validation split each time. With
+    # OUTER LOOP: a fresh, independently drawn training/validation split each time. With
     # num_splits=1 this collapses to the single-split procedure exactly
-    for split in range(num_splits):
-        permuted = rng.permutation(total_training_rows)
-        training_idx = permuted[:num_training_rows]
-        validation_idx = permuted[num_training_rows:num_training_rows + num_validation_rows]
-
-        # ---- training side of this split: never touched by the extra hiding below ----
-        training_data = train_data_with_nan[training_idx]  # already NaN where the mask says so
-        training_mask = train_missing_mask[training_idx]
-        # candidate anchor pool: the initially-imputed (see anchor_impute) TRAINING rows of THIS
-        # split only, mirroring fit_psd_model's own anchor_init='data_subset'. This split's
-        # validation rows never enter it, so no candidate can hold a value that this split then
-        # scores. fill_value is ignored unless strategy is 'constant'
-        training_data_nan = np.where(training_mask, np.nan, training_data)
-        training_anchor_pool = SimpleImputer(strategy=anchor_impute,
-                                             fill_value=0.0).fit_transform(training_data_nan)
-        # dummy value on missing entries, exactly as psd_impute does
-        training_dataset = np.where(training_mask, 0.0, training_data)
-
-        # ---- validation side of this split ----
-        validation_data = train_data_with_nan[validation_idx]
-        already_missing = train_missing_mask[validation_idx]
-        # a fully-missing row can't be fixed here -- there is no real value left in
-        # train_data_with_nan to reveal, it's already NaN. This must be prevented where the mask is
-        # actually created, before any value is discarded (see main_real_dataset.py, which reveals
-        # one entry per fully-missing row right after building the real mask). Fail loudly instead
-        # of silently mishandling it if that invariant was ever violated.
-        assert not (already_missing.sum(axis=1) == num_columns).any(), (
-            "train_missing_mask has at least one fully-missing row in the validation subsample -- "
-            "fix this where the mask is constructed (see reveal_random_entry_if_fully_missing), "
-            "not here"
-        )
-
-        still_observed = ~already_missing
-        extra_hide = (rng.random((num_validation_rows, num_columns))
-                      < extra_hide_probability) & still_observed
-        would_be_fully_missing = np.where(
-            (already_missing | extra_hide).sum(axis=1) == num_columns)[0]
-        extra_hide[would_be_fully_missing] = False
-        # guarantee there is always at least one entry to actually validate against (see
-        # hide_at_least_one_entry_if_none_hidden)
-        hide_at_least_one_entry_if_none_hidden(extra_hide, still_observed, rng)
-
-        # the "true" value at every extra_hide position is simply what validation_data already
-        # holds there (it's observed -- not NaN -- since extra_hide is a subset of
-        # ~already_missing); capture it BEFORE additionally hiding it below. Still no array other
-        # than train_data_with_nan is ever touched.
-        validation_truth = validation_data.copy()
-
-        hidden_from_predictor = already_missing | extra_hide
-        assert np.array_equal(hidden_from_predictor | already_missing, hidden_from_predictor), (
-            "hidden_from_predictor must be a superset of already_missing -- an entry already "
-            "missing beforehand must never come back as observed"
-        )
-        # dummy value on the entries hidden from the predictor, exactly as psd_impute does
-        validation_dataset = np.where(hidden_from_predictor, 0.0, validation_data)
-
+    for split_index in range(num_splits):
+        split = _draw_cv_split(train_data_with_nan, train_missing_mask, extra_hide_probability,
+                               num_training_rows, num_validation_rows, anchor_impute, rng)
         if verbose:
-            print(f"  Split {split + 1}/{num_splits}: {num_training_rows} training rows, "
+            print(f"  Split {split_index + 1}/{num_splits}: {num_training_rows} training rows, "
                   f"{num_validation_rows} validation rows, disjoint (of {total_training_rows} "
                   f"training rows).")
-            if split == 0:
-                _print_cv_setup(already_missing, extra_hide)
+            if split_index == 0:
+                _print_cv_setup(split.already_missing, split.extra_hide)
 
-        # INNER LOOP: candidate anchor-node sets, all drawn from THIS split's fit rows and all
-        # scored on THIS split's validation rows, so they face an identical exam
+        # INNER LOOP: candidate anchor-node sets, all drawn from THIS split's training rows and
+        # all scored on THIS split's validation rows, so they face an identical exam
         for candidate in range(num_candidates_per_split):
             anchor_idx = rng.choice(num_training_rows, size=num_anchor_nodes,
                                     replace=(num_anchor_nodes > num_training_rows))
-            candidate_anchors = training_anchor_pool[anchor_idx].copy()
+            candidate_anchors = split.training_anchor_pool[anchor_idx].copy()
 
-            # fit the predictor on the FIT rows (Newton only -- nbr_bounce=1 leaves the anchor
-            # nodes and precision exactly as given), then apply it to the held-out validation rows
+            # fit on the TRAINING rows (Newton only -- nbr_bounce=1 leaves the anchor nodes and
+            # precision exactly as given), then apply it to the held-out validation rows
             Q, anchors, precision = fit_psd_model(
-                training_dataset, training_mask.astype(float), num_anchor_nodes, eta_init,
-                alpha, lbd / num_training_rows, mu / num_training_rows, lr_nodes, lr_param,
-                nbr_bounce=1, nbr_gradient_steps=1, nbr_newton_step_Q=newton_iterations,
-                seed=seed, fixed_anchor_nodes=candidate_anchors, anchor_impute=anchor_impute,
+                split.training_dataset, split.training_mask.astype(float), num_anchor_nodes,
+                eta_init, alpha, lbd / num_training_rows, mu / num_training_rows,
+                lr_nodes, lr_param, nbr_bounce=1, nbr_gradient_steps=1,
+                nbr_newton_step_Q=newton_iterations, seed=seed,
+                fixed_anchor_nodes=candidate_anchors, anchor_impute=anchor_impute,
             )[:3]
-            imputed = impute_mean(validation_dataset, hidden_from_predictor, Q, anchors, precision)
+            imputed = impute_mean(split.validation_dataset, split.hidden_from_predictor,
+                                  Q, anchors, precision)
 
-            rmse = _cv_score(imputed, validation_truth, extra_hide, already_missing, 'rmse')
-            ed = _cv_score(imputed, validation_truth, extra_hide, already_missing, 'ed')
-            ot_dist = _cv_score(imputed, validation_truth, extra_hide, already_missing, 'ot')
+            rmse, ed, ot_dist = _score_all_metrics(imputed, split)
             score = {'rmse': rmse, 'ed': ed, 'ot': ot_dist}[cv_metric]
-            results.append((split, candidate, rmse, ed, ot_dist))
+            results.append((split_index, candidate, rmse, ed, ot_dist))
             if verbose:
-                print(f"    Split {split + 1}/{num_splits} candidate "
+                print(f"    Split {split_index + 1}/{num_splits} candidate "
                       f"{candidate + 1}/{num_candidates_per_split}: "
                       f"RMSE={rmse:.4f}  ED={ed:.4f}  OT={ot_dist:.4f}"
                       + ("" if cv_metric == 'rmse'
@@ -648,3 +672,128 @@ def cross_validate_anchor_nodes(train_data_with_nan, train_missing_mask, extra_h
 
     return best_anchor_nodes, best_score, results
 
+
+def cross_validate_hyperparams_and_anchors(
+        train_data_with_nan, train_missing_mask, extra_hide_probability, num_anchor_nodes,
+        lr_nodes_grid, lr_param_grid, eta_grid, num_candidates_per_split=5, num_splits=1,
+        num_training_rows=200, num_validation_rows=None, num_bounces=5, num_gradient_steps=5,
+        newton_iterations=20, alpha=1e-6, lbd=1e-1, mu=1e-3, seed=0, verbose=False,
+        cv_metric='rmse', anchor_impute='mean'):
+    """
+    JOINT cross-validation of the hyperparameters AND the anchor nodes, as one search, on the same
+    disjoint training/validation row split the other two use (see _draw_cv_split).
+
+    cross_validate_hyperparams followed by cross_validate_anchor_nodes is a GREEDY search: the
+    hyperparameters are chosen first, against whatever anchor nodes fit_psd_model happened to pick,
+    and are then frozen while the anchors are chosen. That misses any interaction between the two
+    -- an anchor set that is poor under the winning learning rates but excellent under some other
+    combination is never seen. This function searches the product instead:
+
+      OUTER, num_splits times -- draw a fresh split, and draw num_candidates_per_split candidate
+      anchor-node sets from its TRAINING rows. The same candidates are reused across every
+      hyperparameter combination in this split, so the comparison between combinations is exact.
+        INNER, for every (lr_nodes, lr_param, eta_init) x candidate pair -- fit on the training
+        rows with that combination AND that anchor set, impute the held-out validation rows, score.
+
+      Return the single best (hyperparameters, anchor nodes) pair over everything tried.
+
+    Unlike cross_validate_anchor_nodes, the fit here runs the full num_bounces (not a single
+    Newton-only bounce), so the anchor nodes are moved by gradient steps exactly as they will be in
+    the real fit. A candidate is therefore judged as a STARTING POINT that the fit refines, which
+    is how the real run actually uses it -- at the cost of being much more expensive per candidate.
+
+    COST: num_splits * |lr_nodes_grid| * |lr_param_grid| * |eta_grid| * num_candidates_per_split
+    fits, i.e. the anchor stage's cost multiplied by the whole hyperparameter grid. With
+    run_experiment_1.sbatch's 625-combination grid and 10 candidates that is 6250 fits per split
+    per experiment -- shrink the grids before enabling this.
+
+    :param num_anchor_nodes: anchor nodes per candidate set -- should match the real run's
+    :param lr_nodes_grid, lr_param_grid, eta_grid: as in cross_validate_hyperparams
+    :param num_candidates_per_split: candidate anchor-node sets drawn per split
+    :param num_splits, num_training_rows, num_validation_rows: split geometry, see _split_sizes
+    :param num_bounces: alternating minimization bounces per fit (default 5, deliberately small).
+        This is the main cost lever: the search runs |grid| * candidates FULL fits, so every extra
+        bounce is multiplied by that whole product
+    :param num_gradient_steps, newton_iterations, alpha, lbd, mu, seed: see fit_psd_model (lbd/mu
+        divided by num_training_rows)
+    :param verbose, cv_metric, anchor_impute: as in the other two CV functions
+    :return: (best_lr_nodes, best_lr_param, best_eta, best_anchor_nodes, best_score, results) --
+        best_anchor_nodes is (num_anchor_nodes, num_columns), ready to pass as fixed_anchor_nodes;
+        results is the list of (split_index, candidate_index, lr_nodes, lr_param, eta, rmse, ed,
+        ot) tuples tried, in evaluation order
+    """
+    rng = np.random.default_rng(seed)
+    train_missing_mask = np.asarray(train_missing_mask, dtype=bool)
+    total_training_rows = train_data_with_nan.shape[0]
+    num_training_rows, num_validation_rows = _split_sizes(
+        total_training_rows, num_training_rows, num_validation_rows)
+    if num_anchor_nodes > num_training_rows:
+        warnings.warn(
+            f"num_anchor_nodes={num_anchor_nodes} exceeds num_training_rows={num_training_rows}, "
+            f"so the anchor nodes must be drawn WITH replacement and some candidates will contain "
+            f"duplicate rows (a degenerate basis). Either lower num_anchor_nodes, raise "
+            f"num_training_rows, or use a larger training set.",
+            stacklevel=2,
+        )
+
+    total_fits = (num_splits * len(lr_nodes_grid) * len(lr_param_grid) * len(eta_grid)
+                  * num_candidates_per_split)
+    results = []
+    best = {'score': np.inf, 'anchors': None, 'lr_nodes': None, 'lr_param': None, 'eta': None}
+
+    for split_index in range(num_splits):
+        split = _draw_cv_split(train_data_with_nan, train_missing_mask, extra_hide_probability,
+                               num_training_rows, num_validation_rows, anchor_impute, rng)
+        # candidate anchor sets for this split, drawn ONCE and reused across every hyperparameter
+        # combination below, so combinations are compared on identical anchor sets
+        candidates = [
+            split.training_anchor_pool[
+                rng.choice(num_training_rows, size=num_anchor_nodes,
+                           replace=(num_anchor_nodes > num_training_rows))].copy()
+            for _ in range(num_candidates_per_split)
+        ]
+
+        if verbose:
+            print(f"  Split {split_index + 1}/{num_splits}: {num_training_rows} training rows, "
+                  f"{num_validation_rows} validation rows, disjoint (of {total_training_rows} "
+                  f"training rows); {len(candidates)} anchor candidates x "
+                  f"{len(lr_nodes_grid) * len(lr_param_grid) * len(eta_grid)} hyperparameter "
+                  f"combinations = {total_fits // num_splits} fits this split "
+                  f"({total_fits} in total).")
+            if split_index == 0:
+                _print_cv_setup(split.already_missing, split.extra_hide)
+
+        for lr_nodes in lr_nodes_grid:
+            for lr_param in lr_param_grid:
+                for eta_init in eta_grid:
+                    for candidate_index, candidate_anchors in enumerate(candidates):
+                        # full num_bounces: the anchors move, exactly as in the real fit
+                        Q, anchors, precision = fit_psd_model(
+                            split.training_dataset, split.training_mask.astype(float),
+                            num_anchor_nodes, eta_init, alpha, lbd / num_training_rows,
+                            mu / num_training_rows, lr_nodes, lr_param, num_bounces,
+                            num_gradient_steps, newton_iterations, seed=seed,
+                            fixed_anchor_nodes=candidate_anchors, anchor_impute=anchor_impute,
+                        )[:3]
+                        imputed = impute_mean(split.validation_dataset,
+                                              split.hidden_from_predictor, Q, anchors, precision)
+
+                        rmse, ed, ot_dist = _score_all_metrics(imputed, split)
+                        score = {'rmse': rmse, 'ed': ed, 'ot': ot_dist}[cv_metric]
+                        results.append((split_index, candidate_index, lr_nodes, lr_param,
+                                        eta_init, rmse, ed, ot_dist))
+                        if verbose:
+                            print(f"    Split {split_index + 1}/{num_splits} candidate "
+                                  f"{candidate_index + 1}/{num_candidates_per_split}  "
+                                  f"lr_nodes={lr_nodes:.1e}  lr_param={lr_param:.1e}  "
+                                  f"eta_init={eta_init:.4f}  RMSE={rmse:.4f}  ED={ed:.4f}  "
+                                  f"OT={ot_dist:.4f}"
+                                  + ("" if cv_metric == 'rmse'
+                                     else f"  (selecting by {cv_metric.upper()})"))
+
+                        if score < best['score']:
+                            best = {'score': score, 'anchors': candidate_anchors,
+                                    'lr_nodes': lr_nodes, 'lr_param': lr_param, 'eta': eta_init}
+
+    return (best['lr_nodes'], best['lr_param'], best['eta'], best['anchors'], best['score'],
+            results)

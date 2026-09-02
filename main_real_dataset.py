@@ -32,6 +32,7 @@ from MissingDataOT_master.data_loaders import dataset_loader
 from MissingDataOT_master.imputers import OTimputer, RRimputer
 
 from psd_imputer import (psd_impute, cross_validate_hyperparams, cross_validate_anchor_nodes,
+                          cross_validate_hyperparams_and_anchors,
                           reveal_random_entry_if_fully_missing)
 from psd import energy_distance
 
@@ -162,8 +163,17 @@ parser.add_argument('--psd_cross_validate', action='store_true',
                     help='before fitting, cross-validate --psd_lr_nodes/--psd_lr_param/--psd_eta '
                          'on a small, fast validation subsample and use the best combination '
                          '(overrides those three flags)')
-parser.add_argument('--psd_cv_validation_rows', type=int, default=200,
-                    help='validation subsample size for --psd_cross_validate')
+parser.add_argument('--psd_cv_training_rows', type=int, default=200,
+                    help='number of rows each candidate is TRAINED on, per split, for '
+                         '--psd_cross_validate. Same split methodology as the anchor-node CV: '
+                         'candidates are fit here and scored on disjoint held-out rows')
+parser.add_argument('--psd_cv_validation_rows', type=int, default=None,
+                    help='number of rows each candidate is SCORED on, per split, for '
+                         '--psd_cross_validate, drawn disjointly from its training rows. Default '
+                         '(unset) uses every remaining row')
+parser.add_argument('--psd_cv_num_splits', type=int, default=1,
+                    help='number of independent training/validation splits for '
+                         '--psd_cross_validate (default 1)')
 parser.add_argument('--psd_cv_num_anchor_nodes', type=int, default=10,
                     help='number of anchor nodes for --psd_cross_validate')
 parser.add_argument('--psd_cv_num_bounces', type=int, default=20,
@@ -212,6 +222,21 @@ parser.add_argument('--psd_cv_anchor_validation_rows', type=int, default=None,
                          'Default (unset) uses EVERY remaining row, since scoring is much cheaper '
                          'than fitting and more validation rows mean a lower-variance score. Set '
                          'an integer only to cap it deliberately')
+parser.add_argument('--psd_joint_cross_validate', action='store_true',
+                    help='search the hyperparameters AND the anchor nodes JOINTLY, as one grid, '
+                         'instead of the greedy --psd_cross_validate then '
+                         '--psd_anchor_cross_validate sequence (which freezes the hyperparameters '
+                         'before choosing anchors and so cannot see interactions between them). '
+                         'Overrides both of those flags. Uses the --psd_cv_* grids, '
+                         '--psd_cv_anchor_candidates_per_split candidates, and the anchor CV split '
+                         'geometry. COSTS splits x |grid| x candidates fits -- with the default '
+                         '625-combination grid and 10 candidates that is 6250 fits per split per '
+                         'experiment, so shrink the grids before enabling it')
+parser.add_argument('--psd_cv_joint_num_bounces', type=int, default=5,
+                    help='alternating minimization bounces per fit for '
+                         '--psd_joint_cross_validate (default 5, deliberately small). The joint '
+                         'search runs |grid| x candidates FULL fits, so cost scales directly with '
+                         'this -- keep it low')
 parser.add_argument('--psd_cv_anchor_metric', type=str, default='rmse',
                     choices=['rmse', 'ed', 'ot'],
                     help='validation metric for --psd_anchor_cross_validate. ed/ot compare whole '
@@ -387,19 +412,61 @@ if __name__ == "__main__":
             logging.info(f"mask_train (mask_np), same {n_show} rows -- True = missing/hidden:")
             print(mask_np[:n_show].astype(int))
 
-        if args.psd_cross_validate:
+        cv_anchor_nodes = None
+        if args.psd_joint_cross_validate:
             lr_nodes_grid = [float(x) for x in args.psd_cv_lr_nodes_grid.split(',')]
             lr_param_grid = [float(x) for x in args.psd_cv_lr_param_grid.split(',')]
             eta_grid = [float(x) for x in args.psd_cv_eta_grid.split(',')]
-            logging.info(f"cross-validating psd_lr_nodes/psd_lr_param/psd_eta on a "
-                         f"{min(args.psd_cv_validation_rows, ground_truth.shape[0])}-observation, "
-                         f"{args.psd_cv_num_anchor_nodes}-anchor-node validation subsample "
-                         f"({len(lr_nodes_grid) * len(lr_param_grid) * len(eta_grid)} combinations, "
-                         f"metric={args.psd_cv_metric})...")
+            n_combos = len(lr_nodes_grid) * len(lr_param_grid) * len(eta_grid)
+            logging.info(f"JOINT cross-validation of hyperparameters AND anchor nodes: "
+                         f"{args.psd_cv_anchor_num_splits} split(s) x {n_combos} combinations x "
+                         f"{args.psd_cv_anchor_candidates_per_split} anchor candidates = "
+                         f"{args.psd_cv_anchor_num_splits * n_combos * args.psd_cv_anchor_candidates_per_split} "
+                         f"fits, {args.psd_num_anchor_nodes} anchor nodes each, trained on "
+                         f"{args.psd_cv_anchor_training_rows} rows, "
+                         f"metric={args.psd_cv_anchor_metric}...")
+            (best_lr_nodes, best_lr_param, best_eta, cv_anchor_nodes,
+             best_joint_score, _) = cross_validate_hyperparams_and_anchors(
+                data_nas, mask_np, args.p, args.psd_num_anchor_nodes,
+                lr_nodes_grid, lr_param_grid, eta_grid,
+                num_candidates_per_split=args.psd_cv_anchor_candidates_per_split,
+                num_splits=args.psd_cv_anchor_num_splits,
+                num_training_rows=args.psd_cv_anchor_training_rows,
+                num_validation_rows=args.psd_cv_anchor_validation_rows,
+                num_bounces=args.psd_cv_joint_num_bounces,
+                num_gradient_steps=args.psd_gradient_steps,
+                newton_iterations=args.psd_cv_anchor_newton_iterations,
+                alpha=args.psd_alpha, lbd=args.psd_lbd, mu=args.psd_mu, seed=args.seed + n,
+                verbose=True, cv_metric=args.psd_cv_anchor_metric,
+                anchor_impute=args.psd_anchor_impute,
+            )
+            logging.info(f"joint cross-validation winner: psd_lr_nodes={best_lr_nodes:.1e}  "
+                         f"psd_lr_param={best_lr_param:.1e}  psd_eta={best_eta:.4f}  "
+                         f"+ its anchor nodes (validation "
+                         f"{args.psd_cv_anchor_metric.upper()}={best_joint_score:.4f})")
+            args.psd_lr_nodes = best_lr_nodes
+            args.psd_lr_param = best_lr_param
+            args.psd_eta = best_eta
+            args.psd_eta_init_mode = 'fixed'
+
+        if args.psd_cross_validate and not args.psd_joint_cross_validate:
+            lr_nodes_grid = [float(x) for x in args.psd_cv_lr_nodes_grid.split(',')]
+            lr_param_grid = [float(x) for x in args.psd_cv_lr_param_grid.split(',')]
+            eta_grid = [float(x) for x in args.psd_cv_eta_grid.split(',')]
+            logging.info(f"cross-validating psd_lr_nodes/psd_lr_param/psd_eta: "
+                         f"{args.psd_cv_num_splits} split(s) x "
+                         f"{len(lr_nodes_grid) * len(lr_param_grid) * len(eta_grid)} combinations, "
+                         f"{args.psd_cv_num_anchor_nodes} anchor nodes each, trained on "
+                         f"{args.psd_cv_training_rows} rows, metric={args.psd_cv_metric}...")
             best_lr_nodes, best_lr_param, best_eta, best_score, _ = cross_validate_hyperparams(
                 data_nas, mask_np, args.p, lr_nodes_grid, lr_param_grid, eta_grid,
-                m_cv=args.psd_cv_num_anchor_nodes, n_cv=args.psd_cv_validation_rows, nbr_bounce_cv=args.psd_cv_num_bounces,
-                nbr_gradient_steps=args.psd_gradient_steps, nbr_newton_step_Q=args.psd_newton_step_Q,
+                num_anchor_nodes=args.psd_cv_num_anchor_nodes,
+                num_splits=args.psd_cv_num_splits,
+                num_training_rows=args.psd_cv_training_rows,
+                num_validation_rows=args.psd_cv_validation_rows,
+                num_bounces=args.psd_cv_num_bounces,
+                num_gradient_steps=args.psd_gradient_steps,
+                newton_iterations=args.psd_newton_step_Q,
                 alpha=args.psd_alpha, lbd=args.psd_lbd, mu=args.psd_mu, seed=args.seed + n,
                 verbose=True, cv_metric=args.psd_cv_metric,
                 anchor_impute=args.psd_anchor_impute,
@@ -412,8 +479,7 @@ if __name__ == "__main__":
             args.psd_eta = best_eta
             args.psd_eta_init_mode = 'fixed'
 
-        cv_anchor_nodes = None
-        if args.psd_anchor_cross_validate:
+        if args.psd_anchor_cross_validate and not args.psd_joint_cross_validate:
             logging.info(f"cross-validating psd anchor nodes: "
                          f"{args.psd_cv_anchor_num_splits} split(s) x "
                          f"{args.psd_cv_anchor_candidates_per_split} candidates, "
@@ -429,7 +495,11 @@ if __name__ == "__main__":
                 num_training_rows=args.psd_cv_anchor_training_rows,
                 num_validation_rows=args.psd_cv_anchor_validation_rows,
                 newton_iterations=args.psd_cv_anchor_newton_iterations,
-                alpha=args.psd_alpha, lbd=args.psd_lbd, mu=args.psd_mu, seed=args.seed + n,
+                alpha=args.psd_alpha, lbd=args.psd_lbd, mu=args.psd_mu,
+                # offset so this stage draws a DIFFERENT split from the hyperparameter CV above,
+                # which used seed=args.seed + n -- otherwise the anchors would be scored on rows
+                # the hyperparameters were already tuned against
+                seed=args.seed + n + 10_000,
                 verbose=True, cv_metric=args.psd_cv_anchor_metric,
                 anchor_impute=args.psd_anchor_impute,
             )

@@ -49,7 +49,12 @@ conda activate psd_general
 #   --psd_cross_validate      before fitting, cross-validate --psd_lr_nodes/--psd_lr_param/
 #                             --psd_eta on a small, fast validation subsample and use the best
 #                             combination (overrides those three flags)
-#   --psd_cv_validation_rows  validation subsample size for --psd_cross_validate
+#   --psd_cv_training_rows    rows each candidate is TRAINED on, per split, for
+#                             --psd_cross_validate (same split methodology as the anchor CV:
+#                             fit here, scored on disjoint held-out rows)
+#   --psd_cv_validation_rows  rows each candidate is SCORED on for --psd_cross_validate
+#                             (unset = every row left over after the training rows)
+#   --psd_cv_num_splits       independent training/validation splits for --psd_cross_validate
 #   --psd_cv_num_anchor_nodes number of anchor nodes for --psd_cross_validate
 #   --psd_cv_num_bounces      number of alternating minimization bounces for --psd_cross_validate
 #   --psd_cv_lr_nodes_grid    comma-separated candidate values for --psd_lr_nodes
@@ -79,6 +84,15 @@ conda activate psd_general
 #                             before extra-hiding are zeroed out in both the imputed and true
 #                             arrays first, so the score only reflects recovery of the
 #                             extra-hidden entries
+#   --psd_cv_joint_num_bounces  bounces per fit for --psd_joint_cross_validate (small on purpose:
+#                             the joint search runs |grid| x candidates FULL fits, so cost scales
+#                             directly with this)
+#   --psd_joint_cross_validate  search the hyperparameters AND the anchor nodes JOINTLY as one
+#                             grid, instead of the greedy --psd_cross_validate then
+#                             --psd_anchor_cross_validate sequence (which freezes the
+#                             hyperparameters before choosing anchors, so it cannot see any
+#                             interaction between them). Overrides both. Costs
+#                             splits x |grid| x candidates fits -- shrink the grids first
 #   --psd_verbose_metrics     alongside --verbose, also print ORACLE MAE/RMSE/OT/ED every 5th
 #                             bounce (and the last bounce): mean-imputed dataset vs. the true
 #                             underlying training data, at the entries hidden from the fit --
@@ -138,7 +152,7 @@ python3 -u main_real_dataset.py \
     --psd_gradient_steps=2 \
     --psd_newton_step_Q=3 \
     --psd_cross_validate \
-    --psd_cv_validation_rows=200 \
+    --psd_cv_training_rows=200 \
     --psd_cv_num_anchor_nodes=10 \
     --psd_cv_num_bounces=20 \
     --psd_cv_lr_nodes_grid=1e-4,3e-4,1e-3,3e-3,1e-2 \
@@ -146,6 +160,8 @@ python3 -u main_real_dataset.py \
     --psd_cv_eta_grid=-1.2,-1.1,-1.0,-0.9,-0.8,-0.7,-0.6,-0.5,-0.4,-0.3,-0.2,-0.1,0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,1.1,1.2 \
     --psd_cv_metric=ed \
     --psd_anchor_cross_validate \
+    --psd_joint_cross_validate \
+    --psd_cv_joint_num_bounces=5 \
     --psd_cv_anchor_candidates_per_split=10 \
     --psd_cv_anchor_num_splits=1 \
     --psd_cv_anchor_training_rows=200 \
