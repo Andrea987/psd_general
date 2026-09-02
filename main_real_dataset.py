@@ -33,6 +33,7 @@ from MissingDataOT_master.imputers import OTimputer, RRimputer
 
 from psd_imputer import (psd_impute, cross_validate_hyperparams, cross_validate_anchor_nodes,
                           cross_validate_hyperparams_and_anchors,
+                          cross_validate_distributional,
                           reveal_random_entry_if_fully_missing)
 from psd import energy_distance
 
@@ -232,6 +233,15 @@ parser.add_argument('--psd_joint_cross_validate', action='store_true',
                          'geometry. COSTS splits x |grid| x candidates fits -- with the default '
                          '625-combination grid and 10 candidates that is 6250 fits per split per '
                          'experiment, so shrink the grids before enabling it')
+parser.add_argument('--psd_distributional_cross_validate', action='store_true',
+                    help='like --psd_joint_cross_validate (same joint search over hyperparameters '
+                         'and anchor nodes) but scored DISTRIBUTIONALLY: the extra holes are '
+                         'punched into the TRAINING rows, the held-out validation rows are left '
+                         'untouched as a reference sample of real data, and each candidate is '
+                         'scored on how closely its imputed training cloud resembles that '
+                         'reference cloud. Asks "does the filled-in data look real" rather than '
+                         '"did we recover these values", so RMSE does not apply -- '
+                         '--psd_cv_anchor_metric must be ed or ot. Overrides the other CV flags')
 parser.add_argument('--psd_cv_joint_num_bounces', type=int, default=5,
                     help='alternating minimization bounces per fit for '
                          '--psd_joint_cross_validate (default 5, deliberately small). The joint '
@@ -413,7 +423,43 @@ if __name__ == "__main__":
             print(mask_np[:n_show].astype(int))
 
         cv_anchor_nodes = None
-        if args.psd_joint_cross_validate:
+        if args.psd_distributional_cross_validate:
+            lr_nodes_grid = [float(x) for x in args.psd_cv_lr_nodes_grid.split(',')]
+            lr_param_grid = [float(x) for x in args.psd_cv_lr_param_grid.split(',')]
+            eta_grid = [float(x) for x in args.psd_cv_eta_grid.split(',')]
+            n_combos = len(lr_nodes_grid) * len(lr_param_grid) * len(eta_grid)
+            logging.info(f"DISTRIBUTIONAL cross-validation (imputed training cloud vs untouched "
+                         f"held-out cloud): {args.psd_cv_anchor_num_splits} split(s) x "
+                         f"{n_combos} combinations x "
+                         f"{args.psd_cv_anchor_candidates_per_split} anchor candidates = "
+                         f"{args.psd_cv_anchor_num_splits * n_combos * args.psd_cv_anchor_candidates_per_split} "
+                         f"fits, {args.psd_num_anchor_nodes} anchor nodes each, "
+                         f"metric={args.psd_cv_anchor_metric}...")
+            (best_lr_nodes, best_lr_param, best_eta, cv_anchor_nodes,
+             best_dist_score, _) = cross_validate_distributional(
+                data_nas, mask_np, args.p, args.psd_num_anchor_nodes,
+                lr_nodes_grid, lr_param_grid, eta_grid,
+                num_candidates_per_split=args.psd_cv_anchor_candidates_per_split,
+                num_splits=args.psd_cv_anchor_num_splits,
+                num_training_rows=args.psd_cv_anchor_training_rows,
+                num_validation_rows=args.psd_cv_anchor_validation_rows,
+                num_bounces=args.psd_cv_joint_num_bounces,
+                num_gradient_steps=args.psd_gradient_steps,
+                newton_iterations=args.psd_cv_anchor_newton_iterations,
+                alpha=args.psd_alpha, lbd=args.psd_lbd, mu=args.psd_mu, seed=args.seed + n,
+                verbose=True, cv_metric=args.psd_cv_anchor_metric,
+                anchor_impute=args.psd_anchor_impute,
+            )
+            logging.info(f"distributional cross-validation winner: "
+                         f"psd_lr_nodes={best_lr_nodes:.1e}  psd_lr_param={best_lr_param:.1e}  "
+                         f"psd_eta={best_eta:.4f} + its anchor nodes (validation "
+                         f"{args.psd_cv_anchor_metric.upper()}={best_dist_score:.4f})")
+            args.psd_lr_nodes = best_lr_nodes
+            args.psd_lr_param = best_lr_param
+            args.psd_eta = best_eta
+            args.psd_eta_init_mode = 'fixed'
+
+        if args.psd_joint_cross_validate and not args.psd_distributional_cross_validate:
             lr_nodes_grid = [float(x) for x in args.psd_cv_lr_nodes_grid.split(',')]
             lr_param_grid = [float(x) for x in args.psd_cv_lr_param_grid.split(',')]
             eta_grid = [float(x) for x in args.psd_cv_eta_grid.split(',')]
@@ -449,7 +495,8 @@ if __name__ == "__main__":
             args.psd_eta = best_eta
             args.psd_eta_init_mode = 'fixed'
 
-        if args.psd_cross_validate and not args.psd_joint_cross_validate:
+        if (args.psd_cross_validate and not args.psd_joint_cross_validate
+                and not args.psd_distributional_cross_validate):
             lr_nodes_grid = [float(x) for x in args.psd_cv_lr_nodes_grid.split(',')]
             lr_param_grid = [float(x) for x in args.psd_cv_lr_param_grid.split(',')]
             eta_grid = [float(x) for x in args.psd_cv_eta_grid.split(',')]
@@ -480,7 +527,8 @@ if __name__ == "__main__":
             args.psd_eta = best_eta
             args.psd_eta_init_mode = 'fixed'
 
-        if args.psd_anchor_cross_validate and not args.psd_joint_cross_validate:
+        if (args.psd_anchor_cross_validate and not args.psd_joint_cross_validate
+                and not args.psd_distributional_cross_validate):
             logging.info(f"cross-validating psd anchor nodes: "
                          f"{args.psd_cv_anchor_num_splits} split(s) x "
                          f"{args.psd_cv_anchor_candidates_per_split} candidates, "

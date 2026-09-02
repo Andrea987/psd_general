@@ -830,3 +830,256 @@ def cross_validate_hyperparams_and_anchors(
         best['score'] if best['anchors'] is not None else None, cv_metric, len(results))
     return (best['lr_nodes'], best['lr_param'], best['eta'], best['anchors'], best['score'],
             results)
+
+
+_DistributionalSplit = namedtuple('_DistributionalSplit', [
+    'training_dataset',       # (num_training_rows, d) 0 on every augmented-missing entry
+    'training_augmented_mask',# (num_training_rows, d) base missing | extra hidden
+    'training_base_mask',     # (num_training_rows, d) missing before the extra hiding
+    'training_anchor_pool',   # (num_training_rows, d) initially-imputed, to draw anchor nodes from
+    'training_extra_hide',    # (num_training_rows, d) the entries the model actually has to invent
+    'validation_filled_with_zeros',  # (num_validation_rows, d) held out, 0 where originally missing
+])
+
+
+def _draw_distributional_split(train_data_with_nan, train_missing_mask, extra_hide_probability,
+                               num_training_rows, num_validation_rows, anchor_impute, rng):
+    """
+    Draw one disjoint split for cross_validate_distributional -- the MIRROR IMAGE of
+    _draw_cv_split. There, the extra hiding lands on the validation rows and the model is graded
+    entry by entry on recovering them. Here the extra hiding lands on the TRAINING rows, and the
+    held-out validation rows are left completely alone (just zero-filled where they were already
+    missing) to serve as a reference sample of what real data looks like.
+
+    :return: _DistributionalSplit
+    """
+    total_training_rows, num_columns = train_data_with_nan.shape
+    permuted = rng.permutation(total_training_rows)
+    training_idx = permuted[:num_training_rows]
+    validation_idx = permuted[num_training_rows:num_training_rows + num_validation_rows]
+
+    # ---- training side: this is where the extra holes go ----
+    training_data = train_data_with_nan[training_idx]  # already NaN where the mask says so
+    training_base_mask = train_missing_mask[training_idx]
+    assert not (training_base_mask.sum(axis=1) == num_columns).any(), (
+        "train_missing_mask has at least one fully-missing row in the training subsample -- fix "
+        "this where the mask is constructed (see reveal_random_entry_if_fully_missing), not here"
+    )
+
+    still_observed = ~training_base_mask
+    extra_hide = (rng.random((num_training_rows, num_columns))
+                  < extra_hide_probability) & still_observed
+    # never punch out the last observed entry of a row (nothing left to condition on)
+    extra_hide[np.where((training_base_mask | extra_hide).sum(axis=1) == num_columns)[0]] = False
+    # without at least one extra hole the model invents nothing and the comparison below reduces to
+    # sampling noise between the two row sets
+    hide_at_least_one_entry_if_none_hidden(extra_hide, still_observed, rng)
+
+    training_augmented_mask = training_base_mask | extra_hide
+    # anchor pool built from the AUGMENTED data, so the anchor nodes only ever see what the fit
+    # sees. fill_value is ignored unless the strategy is 'constant'
+    training_anchor_pool = SimpleImputer(strategy=anchor_impute, fill_value=0.0).fit_transform(
+        np.where(training_augmented_mask, np.nan, training_data))
+    training_dataset = np.where(training_augmented_mask, 0.0, training_data)
+
+    # ---- validation side: untouched, just zero-filled where it was already missing ----
+    validation_data = train_data_with_nan[validation_idx]
+    validation_filled_with_zeros = np.where(train_missing_mask[validation_idx], 0.0,
+                                            validation_data)
+
+    return _DistributionalSplit(training_dataset, training_augmented_mask, training_base_mask,
+                                training_anchor_pool, extra_hide, validation_filled_with_zeros)
+
+
+def _score_distributional(imputed_training, training_base_mask, validation_filled_with_zeros,
+                          metric, otlim=_OTLIM):
+    """
+    Score how closely the IMPUTED TRAINING CLOUD resembles the held-out VALIDATION CLOUD. Lower is
+    better, so callers can pick with min(...).
+
+    The two arrays are different ROWS, so there is no entry-to-entry correspondence and RMSE is not
+    definable here -- only the distributional metrics are. What is being asked is not "did we
+    recover these particular values" but "once the model has filled in its holes, does the result
+    look like real data".
+
+    Both sides get the same zero-fill convention on the entries that were already missing, so those
+    positions contribute the same constant to each cloud rather than biasing one of them: the only
+    thing that differs between the clouds is that the training rows carry MODEL-INVENTED values
+    where their extra holes were, while the validation rows carry the real values there.
+
+    :param imputed_training: (n_train, d) training rows after the fitted model filled them in
+    :param training_base_mask: (n_train, d) entries missing before the extra hiding -- zeroed here,
+        since nothing is known about them on either side
+    :param validation_filled_with_zeros: (n_val, d) the reference sample of real data
+    :param metric: 'ed' or 'ot' ('rmse' is rejected -- see above)
+    :return: float score
+    """
+    if metric == 'rmse':
+        raise ValueError(
+            "cross_validate_distributional compares two different sets of ROWS, so there is no "
+            "entry-to-entry correspondence for RMSE to average over. Use 'ed' or 'ot', or use "
+            "cross_validate_hyperparams_and_anchors for entry-wise scoring."
+        )
+
+    scored = np.where(training_base_mask, 0.0, imputed_training)
+
+    if metric == 'ed':
+        return float(energy_distance(scored, validation_filled_with_zeros))
+
+    if metric == 'ot':
+        n, m = scored.shape[0], validation_filled_with_zeros.shape[0]
+        if n == 0 or m == 0 or max(n, m) >= otlim:
+            return float('nan')
+        dists = ((scored[:, None] - validation_filled_with_zeros) ** 2).sum(axis=2) / 2.
+        return float(ot.emd2(np.ones(n) / n, np.ones(m) / m, dists))
+
+    raise ValueError(f"unknown metric: {metric!r} (expected 'ed' or 'ot')")
+
+
+def cross_validate_distributional(
+        train_data_with_nan, train_missing_mask, extra_hide_probability, num_anchor_nodes,
+        lr_nodes_grid, lr_param_grid, eta_grid, num_candidates_per_split=5, num_splits=1,
+        num_training_rows=200, num_validation_rows=None, num_bounces=5, num_gradient_steps=5,
+        newton_iterations=20, alpha=1e-6, lbd=1e-1, mu=1e-3, seed=0, verbose=False,
+        cv_metric='ed', anchor_impute='mean'):
+    """
+    Joint cross-validation of the hyperparameters AND the anchor nodes, scored DISTRIBUTIONALLY
+    rather than entry by entry. Same search as cross_validate_hyperparams_and_anchors; different
+    question asked of each candidate.
+
+    Per split:
+      1. Cut the training rows into a disjoint training part and validation part.
+      2. Leave the VALIDATION part completely alone -- no extra hiding -- and just zero-fill the
+         entries that were already missing. This is the reference sample of what real data looks
+         like.
+      3. Punch extra MCAR holes (extra_hide_probability) into the TRAINING part, on top of what was
+         already missing, and zero-fill all of them.
+      4. Per (hyperparameter combination x anchor candidate): fit on that holed training part,
+         then impute it with the fitted model, then zero out the entries that were missing to begin
+         with -- so the only model-invented values left are the ones in the extra holes.
+      5. Score how close that imputed training cloud is to the untouched validation cloud
+         (see _score_distributional).
+
+    The two clouds are DIFFERENT ROWS, which is what makes this different in kind from the other
+    CV functions in this module. There is no entry-to-entry correspondence, so RMSE does not exist
+    here and cv_metric must be 'ed' or 'ot'. The question is not "did we recover these particular
+    values" but "after the model fills its holes, does the result look like real data" -- the
+    criterion optimal-transport imputation methods optimise directly.
+
+    Leak-free for the same structural reason as the rest: the validation rows are never fit on,
+    never supply an anchor node, and are never altered -- they are only ever a reference sample.
+
+    VALIDATED against an oracle on iris (75 training rows, 55 extra holes, 75 validation rows),
+    filling those holes four different ways:
+
+        filling of the extra holes              ED        OT   entrywise RMSE
+        ORACLE (the true values)            0.0294    0.2967   0.0000
+        model imputation                    0.0540    0.4072   0.9514
+        column mean                         0.0442    0.3269   1.0409
+        zeros (no imputation)               0.0406    0.3225   1.0249
+
+    The oracle wins on both metrics, so the criterion does measure imputation quality rather than
+    an artifact. But read the rest of that table before selecting on it: the model came LAST
+    distributionally while being the BEST of the three non-oracle fillings entry-wise. Inventing
+    values with the wrong spread moves the cloud further than leaving the holes at 0 does, so this
+    criterion can rank a bold-but-imprecise imputation below a conservative one, and its ordering
+    need not agree with RMSE's. That is a real difference in what is being asked, not a defect --
+    but if you want "did we recover these values", use cross_validate_hyperparams_and_anchors.
+
+    Two further caveats. Only the extra-hidden entries carry model-invented values, so most of each
+    training row is real observed data and the distance mixes imputation quality with ordinary
+    sampling noise between two finite row sets -- the smaller extra_hide_probability is, the more
+    the latter dominates. And both clouds carry an artificial spike of zeros at their
+    already-missing entries; the heavier the base missingness, the more of the distance that spike
+    accounts for. Compare candidates against each other on one split rather than reading a single
+    number as an absolute.
+
+    :param num_anchor_nodes: anchor nodes per candidate set -- should match the real run's
+    :param lr_nodes_grid, lr_param_grid, eta_grid: as in cross_validate_hyperparams
+    :param num_candidates_per_split: candidate anchor-node sets drawn per split, reused across
+        every hyperparameter combination so combinations are compared on identical anchors
+    :param num_splits, num_training_rows, num_validation_rows: split geometry, see _split_sizes
+    :param num_bounces: bounces per fit (default 5, small on purpose -- this runs |grid| x
+        candidates FULL fits, so cost scales directly with it)
+    :param num_gradient_steps, newton_iterations, alpha, lbd, mu, seed: see fit_psd_model (lbd/mu
+        divided by num_training_rows)
+    :param cv_metric: 'ed' (default) or 'ot'. 'rmse' raises -- see above
+    :param verbose, anchor_impute: as in the other CV functions
+    :return: (best_lr_nodes, best_lr_param, best_eta, best_anchor_nodes, best_score, results) --
+        results is the list of (split_index, candidate_index, lr_nodes, lr_param, eta, ed, ot)
+        tuples tried, in evaluation order
+    """
+    if cv_metric == 'rmse':
+        _score_distributional(None, None, None, 'rmse')  # raises with the explanation
+    rng = np.random.default_rng(seed)
+    train_missing_mask = np.asarray(train_missing_mask, dtype=bool)
+    total_training_rows = train_data_with_nan.shape[0]
+    num_training_rows, num_validation_rows = _split_sizes(
+        total_training_rows, num_training_rows, num_validation_rows)
+    if num_anchor_nodes > num_training_rows:
+        warnings.warn(
+            f"num_anchor_nodes={num_anchor_nodes} exceeds num_training_rows={num_training_rows}, "
+            f"so the anchor nodes must be drawn WITH replacement and some candidates will contain "
+            f"duplicate rows (a degenerate basis). Either lower num_anchor_nodes, raise "
+            f"num_training_rows, or use a larger training set.",
+            stacklevel=2,
+        )
+
+    results = []
+    best = {'score': np.inf, 'anchors': None, 'lr_nodes': None, 'lr_param': None, 'eta': None}
+
+    for split_index in range(num_splits):
+        split = _draw_distributional_split(
+            train_data_with_nan, train_missing_mask, extra_hide_probability,
+            num_training_rows, num_validation_rows, anchor_impute, rng)
+        candidates = [
+            split.training_anchor_pool[
+                rng.choice(num_training_rows, size=num_anchor_nodes,
+                           replace=(num_anchor_nodes > num_training_rows))].copy()
+            for _ in range(num_candidates_per_split)
+        ]
+
+        if verbose:
+            print(f"  Split {split_index + 1}/{num_splits}: {num_training_rows} training rows "
+                  f"({int(split.training_base_mask.sum())} already missing + "
+                  f"{int(split.training_extra_hide.sum())} extra holes punched, the only entries "
+                  f"the model has to invent), scored against {num_validation_rows} untouched "
+                  f"validation rows as a distribution ({cv_metric.upper()}).")
+
+        for lr_nodes in lr_nodes_grid:
+            for lr_param in lr_param_grid:
+                for eta_init in eta_grid:
+                    for candidate_index, candidate_anchors in enumerate(candidates):
+                        Q, anchors, precision = fit_psd_model(
+                            split.training_dataset, split.training_augmented_mask.astype(float),
+                            num_anchor_nodes, eta_init, alpha, lbd / num_training_rows,
+                            mu / num_training_rows, lr_nodes, lr_param, num_bounces,
+                            num_gradient_steps, newton_iterations, seed=seed,
+                            fixed_anchor_nodes=candidate_anchors, anchor_impute=anchor_impute,
+                        )[:3]
+                        imputed = impute_mean(split.training_dataset,
+                                              split.training_augmented_mask, Q, anchors, precision)
+
+                        ed = _score_distributional(imputed, split.training_base_mask,
+                                                   split.validation_filled_with_zeros, 'ed')
+                        ot_dist = _score_distributional(imputed, split.training_base_mask,
+                                                        split.validation_filled_with_zeros, 'ot')
+                        score = {'ed': ed, 'ot': ot_dist}[cv_metric]
+                        results.append((split_index, candidate_index, lr_nodes, lr_param,
+                                        eta_init, ed, ot_dist))
+                        if verbose:
+                            print(f"    Split {split_index + 1}/{num_splits} candidate "
+                                  f"{candidate_index + 1}/{num_candidates_per_split}  "
+                                  f"lr_nodes={lr_nodes:.1e}  lr_param={lr_param:.1e}  "
+                                  f"eta_init={eta_init:.4f}  ED={ed:.4f}  OT={ot_dist:.4f}"
+                                  + ("" if cv_metric == 'ed'
+                                     else f"  (selecting by {cv_metric.upper()})"))
+
+                        if score < best['score']:
+                            best = {'score': score, 'anchors': candidate_anchors,
+                                    'lr_nodes': lr_nodes, 'lr_param': lr_param, 'eta': eta_init}
+
+    _assert_selection_happened(
+        best['score'] if best['anchors'] is not None else None, cv_metric, len(results))
+    return (best['lr_nodes'], best['lr_param'], best['eta'], best['anchors'], best['score'],
+            results)
