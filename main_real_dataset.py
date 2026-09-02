@@ -243,9 +243,10 @@ parser.add_argument('--psd_distributional_cross_validate', action='store_true',
                          '"did we recover these values", so RMSE does not apply -- '
                          '--psd_cv_anchor_metric must be ed or ot. Overrides the other CV flags')
 parser.add_argument('--psd_cv_joint_num_bounces', type=int, default=5,
-                    help='alternating minimization bounces per fit for '
-                         '--psd_joint_cross_validate (default 5, deliberately small). The joint '
-                         'search runs |grid| x candidates FULL fits, so cost scales directly with '
+                    help='alternating minimization bounces per fit for the two full-fit '
+                         'searches, --psd_joint_cross_validate and '
+                         '--psd_distributional_cross_validate (default 5, deliberately small). '
+                         'Both run |grid| x candidates FULL fits, so cost scales directly with '
                          'this -- keep it low')
 parser.add_argument('--psd_cv_anchor_metric', type=str, default='rmse',
                     choices=['rmse', 'ed', 'ot'],

@@ -46,17 +46,11 @@ conda activate psd_general
 #   --psd_newton_step_Q       max Newton iterations per Q update
 #   --verbose_newton          print every Newton iteration (loss, decrement) inside every bounce's
 #                             inner Q update, separately from --verbose's per-5-bounce summary
-#   --psd_cross_validate      before fitting, cross-validate --psd_lr_nodes/--psd_lr_param/
-#                             --psd_eta on a small, fast validation subsample and use the best
-#                             combination (overrides those three flags)
-#   --psd_cv_training_rows    rows each candidate is TRAINED on, per split, for
-#                             --psd_cross_validate (same split methodology as the anchor CV:
-#                             fit here, scored on disjoint held-out rows)
-#   --psd_cv_validation_rows  rows each candidate is SCORED on for --psd_cross_validate
-#                             (unset = every row left over after the training rows)
-#   --psd_cv_num_splits       independent training/validation splits for --psd_cross_validate
-#   --psd_cv_num_anchor_nodes number of anchor nodes for --psd_cross_validate
-#   --psd_cv_num_bounces      number of alternating minimization bounces for --psd_cross_validate
+# THIS FILE RUNS THE DISTRIBUTIONAL CV (--psd_distributional_cross_validate). That flag overrides
+# every other CV mode, so --psd_cross_validate / --psd_anchor_cross_validate / --psd_cv_training_rows
+# / --psd_cv_num_anchor_nodes / --psd_cv_num_bounces / --psd_cv_metric are deliberately NOT passed
+# below -- they would be read by nobody. To switch modes, swap the one flag and put them back.
+#
 #   --psd_cv_lr_nodes_grid    comma-separated candidate values for --psd_lr_nodes
 #   --psd_cv_lr_param_grid    comma-separated candidate values for --psd_lr_param
 #   --psd_cv_eta_grid         comma-separated candidate LOG-precision starting points for --psd_eta
@@ -93,6 +87,15 @@ conda activate psd_general
 #                             hyperparameters before choosing anchors, so it cannot see any
 #                             interaction between them). Overrides both. Costs
 #                             splits x |grid| x candidates fits -- shrink the grids first
+#   --psd_distributional_cross_validate  same joint search, but scored DISTRIBUTIONALLY: the extra
+#                             holes go into the TRAINING rows, the held-out rows are left untouched
+#                             as a reference sample of real data, and each candidate is scored on
+#                             how closely its imputed training cloud resembles that reference
+#                             cloud. Asks "does the filled-in data look real" rather than "did we
+#                             recover these values". It is also the only CV that imputes the SAME
+#                             rows it fit on, matching what the real run does. Overrides every
+#                             other CV flag; --psd_cv_anchor_metric must be ed or ot (not rmse).
+#                             Same cost as the joint search
 #   --psd_verbose_metrics     alongside --verbose, also print ORACLE MAE/RMSE/OT/ED every 5th
 #                             bounce (and the last bounce): mean-imputed dataset vs. the true
 #                             underlying training data, at the entries hidden from the fit --
@@ -151,16 +154,10 @@ python3 -u main_real_dataset.py \
     --psd_bounce=5 \
     --psd_gradient_steps=2 \
     --psd_newton_step_Q=3 \
-    --psd_cross_validate \
-    --psd_cv_training_rows=200 \
-    --psd_cv_num_anchor_nodes=10 \
-    --psd_cv_num_bounces=20 \
     --psd_cv_lr_nodes_grid=1e-4,3e-4,1e-3,3e-3,1e-2 \
     --psd_cv_lr_param_grid=1e-5,3e-5,1e-4,3e-4,1e-3 \
     --psd_cv_eta_grid=-1.2,-1.1,-1.0,-0.9,-0.8,-0.7,-0.6,-0.5,-0.4,-0.3,-0.2,-0.1,0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,1.1,1.2 \
-    --psd_cv_metric=ed \
-    --psd_anchor_cross_validate \
-    --psd_joint_cross_validate \
+    --psd_distributional_cross_validate \
     --psd_cv_joint_num_bounces=5 \
     --psd_cv_anchor_candidates_per_split=10 \
     --psd_cv_anchor_num_splits=1 \
